@@ -747,6 +747,12 @@ PetscErrorCode Flow_Solver(UserMG *usermg,IBMNodes *ibm, FSInfo *fsi, PetscInt i
 	bi=0;
 	if (ti == (ti/tiout) * tiout) {
 		Ucont_P_Binary_Output(&(user[bi]));
+#ifdef ENABLE_VTK_OUTPUT
+		// VTK output for ParaView visualization
+		if (vtk_output) {
+			VTK_WriteStructuredGridCombined(&(user[bi]), ti);
+		}
+#endif
 	}
 	else if (tiout_ufield>0 && ti == (ti/tiout_ufield) * tiout_ufield && ti<=tiend_ufield) {
 		Ucat_Binary_Output(&(user[bi]));

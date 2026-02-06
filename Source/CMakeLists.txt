@@ -38,6 +38,21 @@ set(VWIS_SOURCES
     wave.c
 )
 
+# XML Input support (optional)
+if(ENABLE_XML_INPUT)
+    list(APPEND VWIS_SOURCES
+        tinyxml2/tinyxml2.cpp
+        xml_input.cpp
+    )
+endif()
+
+# VTK Output support (optional)
+if(ENABLE_VTK_OUTPUT)
+    list(APPEND VWIS_SOURCES
+        vtk_output.cpp
+    )
+endif()
+
 # Create vwis executable
 add_executable(vwis ${VWIS_SOURCES})
 
@@ -69,6 +84,18 @@ target_link_libraries(vwis PRIVATE
 
 # Compile definitions
 target_compile_definitions(vwis PRIVATE NDEBUG)
+
+# XML Input compile definition
+if(ENABLE_XML_INPUT)
+    target_compile_definitions(vwis PRIVATE ENABLE_XML_INPUT)
+    message(STATUS "XML input support: ENABLED")
+endif()
+
+# VTK Output compile definition
+if(ENABLE_VTK_OUTPUT)
+    target_compile_definitions(vwis PRIVATE ENABLE_VTK_OUTPUT)
+    message(STATUS "VTK output support: ENABLED")
+endif()
 
 # Compiler flags
 target_compile_options(vwis PRIVATE

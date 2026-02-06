@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  VFS-Wind XML Configuration File
+  Example for 3D Sloshing Test Case
+-->
+<vfswind version="1.0">
+  <!-- Simulation control -->
+  <simulation>
+    <timestep dt="0.001" totalsteps="1" output_interval="1"/>
+    <restart enabled="0" timestep="0"/>
+  </simulation>
+
+  <!-- Physics parameters -->
+  <physics>
+    <reynolds_number>1000</reynolds_number>
+    <gravity x="0.0" y="-9.8" z="0.0"/>
+  </physics>
+
+  <!-- Turbulence modeling -->
+  <turbulence>
+    <les enabled="0" model="smagorinsky" cs="0.1"/>
+    <rans enabled="0" model="k-omega-sst"/>
+    <wall_function enabled="0"/>
+  </turbulence>
+
+  <!-- Level set (two-phase flow) -->
+  <levelset enabled="1">
+    <fluid0 density="1000" viscosity="1.0e-3"/>
+    <fluid1 density="1" viscosity="1.8e-5"/>
+    <iterations>10</iterations>
+  </levelset>
+
+  <!-- Solver settings -->
+  <solvers>
+    <poisson type="1" iterations="15" tolerance="5e-9"/>
+    <momentum implicit="0" max_iterations="50"/>
+  </solvers>
+
+  <!-- Parallel settings -->
+  <parallel>
+    <periodic i="0" j="0" k="0"/>
+  </parallel>
+
+  <!-- Output settings -->
+  <output>
+    <path>./</path>
+    <vtk enabled="1"/>
+    <binary enabled="0"/>
+  </output>
+
+  <!-- Grid and boundary files -->
+  <grid file="grid.dat" format="xyz"/>
+  <boundaries file="bcs.dat"/>
+</vfswind>

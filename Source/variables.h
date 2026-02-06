@@ -1386,5 +1386,34 @@ static double Butcher_ARK4_A[6][6] = {
 
 static double Butcher_ESDIRK4_B[6] = { 82889./524892., 0., 15625./83664., 69875./102672., -2260./8211., 1./4. };
 */
+
+// VTK output support
+#ifdef ENABLE_VTK_OUTPUT
+extern PetscInt vtk_output;      // Enable VTK output (0/1)
+extern PetscInt vtk_binary;      // Use binary encoding (0/1)
+#ifdef __cplusplus
+extern "C" {
+#endif
+int VTK_WriteStructuredGrid(UserCtx* user, int timestep);
+int VTK_WriteStructuredGridCombined(UserCtx* user, int timestep);
+int VTK_Initialize(void);
+int VTK_Finalize(void);
+#ifdef __cplusplus
+}
+#endif
+#endif
+
+// XML input support
+#ifdef ENABLE_XML_INPUT
+#ifdef __cplusplus
+extern "C" {
+#endif
+int ParseXMLControlFile(const char* filename);
+int xml_file_exists(const char* filename);
+#ifdef __cplusplus
+}
+#endif
+#endif
+
 #endif
 #endif

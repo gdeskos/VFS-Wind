@@ -1362,12 +1362,52 @@ int main(int argc, char **argv)
 	
 	PetscInitialize(&argc, &argv, (char *)0, help);
 	PetscBarrier(NULL);
-	
+
 	MPI_Comm_rank(PETSC_COMM_WORLD, &my_rank);
 	srand( time(NULL)) ;	// Seokkoo Kang
 
+	// Verbose flag - pass to PETSc logging
+	{
+		PetscInt verbose_level = 0;
+		PetscBool verbose_set = PETSC_FALSE;
+		PetscOptionsGetInt(NULL, NULL, "-verbose", &verbose_level, &verbose_set);
+		if (verbose_set && verbose_level > 0) {
+			// Enable PETSc info logging for verbose output
+			PetscOptionsSetValue(NULL, "-info", NULL);
+			if (verbose_level > 1) {
+				PetscOptionsSetValue(NULL, "-log_view", NULL);
+			}
+			PetscPrintf(PETSC_COMM_WORLD, "Verbose mode enabled (level %d)\n", (int)verbose_level);
+		}
+	}
+
+	// Input file handling: XML or legacy control.dat
+#ifdef ENABLE_XML_INPUT
+	{
+		char xml_file[256] = "control.xml";
+		PetscBool xml_specified = PETSC_FALSE;
+
+		// Check for command-line override: -xml filename.xml
+		PetscOptionsGetString(NULL, NULL, "-xml", xml_file, sizeof(xml_file), &xml_specified);
+
+		if (xml_specified || xml_file_exists("control.xml")) {
+			PetscPrintf(PETSC_COMM_WORLD, "Reading XML configuration: %s\n", xml_file);
+			if (ParseXMLControlFile(xml_file) != 0) {
+				PetscPrintf(PETSC_COMM_WORLD, "Warning: Failed to parse XML file, falling back to control.dat\n");
+				PetscOptionsInsertFile(PETSC_COMM_WORLD, NULL, "control.dat", PETSC_TRUE);
+			}
+		} else {
+			PetscOptionsInsertFile(PETSC_COMM_WORLD, NULL, "control.dat", PETSC_TRUE);
+		}
+	}
+#else
 	PetscOptionsInsertFile(PETSC_COMM_WORLD, NULL, "control.dat", PETSC_TRUE);
-	
+#endif
+
+#ifdef ENABLE_VTK_OUTPUT
+	VTK_Initialize();
+#endif
+
 	PetscOptionsGetInt(NULL, NULL, "-tio", &tiout, NULL);
 	PetscOptionsGetInt(NULL, NULL, "-tiou", &tiout_ufield, NULL);
 	PetscOptionsGetInt(NULL, NULL, "-tieu", &tiend_ufield, NULL);
