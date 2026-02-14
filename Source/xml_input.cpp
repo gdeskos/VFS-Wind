@@ -61,7 +61,7 @@ static void ParseSimulation(XMLElement* root) {
             SetPetscOptionReal("-dt", dt);
         }
         if (timestep->QueryIntAttribute("totalsteps", &totalsteps) == XML_SUCCESS) {
-            SetPetscOptionInt("-ti", totalsteps);
+            SetPetscOptionInt("-totalsteps", totalsteps);
         }
         if (timestep->QueryIntAttribute("output_interval", &output_interval) == XML_SUCCESS) {
             SetPetscOptionInt("-tio", output_interval);
@@ -76,6 +76,27 @@ static void ParseSimulation(XMLElement* root) {
             if (restart->QueryIntAttribute("timestep", &timestep_val) == XML_SUCCESS) {
                 SetPetscOptionInt("-rstart", timestep_val);
             }
+        }
+    }
+
+    XMLElement* options = sim->FirstChildElement("options");
+    if (options) {
+        int delete_output = 0;
+        int second_order = 0;
+        int laplacian = 0;
+        int averaging = 0;
+
+        if (options->QueryIntAttribute("delete_previous", &delete_output) == XML_SUCCESS) {
+            SetPetscOptionInt("-delete", delete_output);
+        }
+        if (options->QueryIntAttribute("second_order", &second_order) == XML_SUCCESS) {
+            SetPetscOptionInt("-second_order", second_order);
+        }
+        if (options->QueryIntAttribute("laplacian", &laplacian) == XML_SUCCESS) {
+            SetPetscOptionInt("-laplacian", laplacian);
+        }
+        if (options->QueryIntAttribute("averaging", &averaging) == XML_SUCCESS) {
+            SetPetscOptionInt("-averaging", averaging);
         }
     }
 }
@@ -99,9 +120,9 @@ static void ParsePhysics(XMLElement* root) {
         gravity->QueryDoubleAttribute("x", &gx);
         gravity->QueryDoubleAttribute("y", &gy);
         gravity->QueryDoubleAttribute("z", &gz);
-        SetPetscOptionReal("-gravity_x", gx);
-        SetPetscOptionReal("-gravity_y", gy);
-        SetPetscOptionReal("-gravity_z", gz);
+        SetPetscOptionReal("-gx", gx);
+        SetPetscOptionReal("-gy", gy);
+        SetPetscOptionReal("-gz", gz);
     }
 }
 
@@ -123,9 +144,12 @@ static void ParseTurbulence(XMLElement* root) {
                     SetPetscOptionInt("-les", 2);
                 }
             }
-            double cs = 0.1;
-            if (les->QueryDoubleAttribute("cs", &cs) == XML_SUCCESS) {
-                SetPetscOptionReal("-cs", cs);
+            // Note: "cs" attribute is parsed but not set as PETSc option because
+            // -cs is used by post-processors (data.c) as an integer flag.
+            // The Smagorinsky constant is computed dynamically in les.c.
+            double max_cs = 0.2;
+            if (les->QueryDoubleAttribute("max_cs", &max_cs) == XML_SUCCESS) {
+                SetPetscOptionReal("-max_cs", max_cs);
             }
         }
     }
@@ -143,6 +167,11 @@ static void ParseTurbulence(XMLElement* root) {
         int enabled = 0;
         if (wf->QueryIntAttribute("enabled", &enabled) == XML_SUCCESS && enabled) {
             SetPetscOptionInt("-wallfunction", 1);
+            SetPetscOptionInt("-viscosity_wallmodel", 1);
+        }
+        double channel_height = 0.0;
+        if (wf->QueryDoubleAttribute("channel_height", &channel_height) == XML_SUCCESS) {
+            SetPetscOptionReal("-channel_height", channel_height);
         }
     }
 }
@@ -157,14 +186,15 @@ static void ParseLevelset(XMLElement* root) {
         SetPetscOptionInt("-levelset", 1);
     }
 
+    // Fluid properties (fluid0 = water/heavy, fluid1 = air/light)
     XMLElement* fluid0 = ls->FirstChildElement("fluid0");
     if (fluid0) {
         double density = 0.0, viscosity = 0.0;
         if (fluid0->QueryDoubleAttribute("density", &density) == XML_SUCCESS) {
-            SetPetscOptionReal("-rho_water", density);
+            SetPetscOptionReal("-rho0", density);
         }
         if (fluid0->QueryDoubleAttribute("viscosity", &viscosity) == XML_SUCCESS) {
-            SetPetscOptionReal("-mu_water", viscosity);
+            SetPetscOptionReal("-mu0", viscosity);
         }
     }
 
@@ -172,19 +202,73 @@ static void ParseLevelset(XMLElement* root) {
     if (fluid1) {
         double density = 0.0, viscosity = 0.0;
         if (fluid1->QueryDoubleAttribute("density", &density) == XML_SUCCESS) {
-            SetPetscOptionReal("-rho_air", density);
+            SetPetscOptionReal("-rho1", density);
         }
         if (fluid1->QueryDoubleAttribute("viscosity", &viscosity) == XML_SUCCESS) {
-            SetPetscOptionReal("-mu_air", viscosity);
+            SetPetscOptionReal("-mu1", viscosity);
         }
     }
 
+    // Levelset iterations
     XMLElement* iterations = ls->FirstChildElement("iterations");
     if (iterations) {
         int it = 10;
         if (iterations->QueryIntText(&it) == XML_SUCCESS) {
             SetPetscOptionInt("-levelset_it", it);
         }
+    }
+
+    // Sloshing mode
+    int sloshing = 0;
+    if (ls->QueryIntAttribute("sloshing", &sloshing) == XML_SUCCESS && sloshing > 0) {
+        SetPetscOptionInt("-sloshing", sloshing);
+    }
+
+    // Surface tension
+    int stension = 0;
+    if (ls->QueryIntAttribute("surface_tension", &stension) == XML_SUCCESS) {
+        SetPetscOptionInt("-stension", stension);
+    }
+
+    // Level initialization
+    int level_in = 0;
+    if (ls->QueryIntAttribute("level_in", &level_in) == XML_SUCCESS) {
+        SetPetscOptionInt("-level_in", level_in);
+    }
+
+    double level_in_height = 0.0;
+    if (ls->QueryDoubleAttribute("level_in_height", &level_in_height) == XML_SUCCESS) {
+        SetPetscOptionReal("-level_in_height", level_in_height);
+    }
+
+    // Interface thickness
+    double dthick = 0.0;
+    if (ls->QueryDoubleAttribute("dthick", &dthick) == XML_SUCCESS) {
+        SetPetscOptionReal("-dthick", dthick);
+    }
+
+    // Levelset tau (reinitialization parameter)
+    double levelset_tau = 0.0;
+    if (ls->QueryDoubleAttribute("tau", &levelset_tau) == XML_SUCCESS) {
+        SetPetscOptionReal("-levelset_tau", levelset_tau);
+    }
+
+    // Subdt for levelset
+    int subdt = 0;
+    if (ls->QueryIntAttribute("subdt", &subdt) == XML_SUCCESS) {
+        SetPetscOptionInt("-subdt_levelset", subdt);
+    }
+
+    // Air flow levelset
+    int air_flow = 0;
+    if (ls->QueryIntAttribute("air_flow", &air_flow) == XML_SUCCESS) {
+        SetPetscOptionInt("-air_flow_levelset", air_flow);
+    }
+
+    // Fix level
+    int fix_level = 0;
+    if (ls->QueryIntAttribute("fix_level", &fix_level) == XML_SUCCESS) {
+        SetPetscOptionInt("-fix_level", fix_level);
     }
 }
 
@@ -205,20 +289,23 @@ static void ParseSolvers(XMLElement* root) {
 
         SetPetscOptionInt("-poisson", type);
         SetPetscOptionInt("-poisson_it", iterations);
-        SetPetscOptionReal("-poisson_threshold", tolerance);
+        SetPetscOptionReal("-poisson_tol", tolerance);
     }
 
     XMLElement* momentum = solvers->FirstChildElement("momentum");
     if (momentum) {
         int implicit = 0;
         int max_iterations = 50;
+        double tolerance = 1.e-5;
 
         momentum->QueryIntAttribute("implicit", &implicit);
         momentum->QueryIntAttribute("max_iterations", &max_iterations);
+        momentum->QueryDoubleAttribute("tolerance", &tolerance);
 
         if (implicit > 0) {
             SetPetscOptionInt("-imp", implicit);
             SetPetscOptionInt("-imp_MAX_IT", max_iterations);
+            SetPetscOptionReal("-imp_tol", tolerance);
         }
     }
 }
@@ -231,13 +318,21 @@ static void ParseParallel(XMLElement* root) {
     XMLElement* periodic = parallel->FirstChildElement("periodic");
     if (periodic) {
         int i = 0, j = 0, k = 0;
+        int ii = 0, jj = 0, kk = 0;
         periodic->QueryIntAttribute("i", &i);
         periodic->QueryIntAttribute("j", &j);
         periodic->QueryIntAttribute("k", &k);
+        // Also support ii, jj, kk variants (used in channel flow)
+        periodic->QueryIntAttribute("ii", &ii);
+        periodic->QueryIntAttribute("jj", &jj);
+        periodic->QueryIntAttribute("kk", &kk);
 
         if (i) SetPetscOptionInt("-i_periodic", i);
         if (j) SetPetscOptionInt("-j_periodic", j);
         if (k) SetPetscOptionInt("-k_periodic", k);
+        if (ii) SetPetscOptionInt("-ii_periodic", ii);
+        if (jj) SetPetscOptionInt("-jj_periodic", jj);
+        if (kk) SetPetscOptionInt("-kk_periodic", kk);
     }
 }
 
@@ -310,6 +405,30 @@ static void ParseImmersedBoundary(XMLElement* root) {
     }
 }
 
+// Parse channel flow section
+static void ParseChannelFlow(XMLElement* root) {
+    XMLElement* channel = root->FirstChildElement("channel_flow");
+    if (!channel) return;
+
+    int enabled = 0;
+    if (channel->QueryIntAttribute("enabled", &enabled) == XML_SUCCESS && enabled) {
+        double flux = 0.0;
+        if (channel->QueryDoubleAttribute("flux", &flux) == XML_SUCCESS) {
+            SetPetscOptionReal("-flux", flux);
+        }
+
+        int inlet = 1;
+        if (channel->QueryIntAttribute("inlet", &inlet) == XML_SUCCESS) {
+            SetPetscOptionInt("-inlet", inlet);
+        }
+
+        int perturb = 0;
+        if (channel->QueryIntAttribute("perturb", &perturb) == XML_SUCCESS) {
+            SetPetscOptionInt("-perturb", perturb);
+        }
+    }
+}
+
 // Parse rotor model section
 static void ParseRotorModel(XMLElement* root) {
     XMLElement* rotor = root->FirstChildElement("rotor_model");
@@ -370,6 +489,7 @@ extern "C" int ParseXMLControlFile(const char* filename) {
     ParseFiles(root);
     ParseImmersedBoundary(root);
     ParseRotorModel(root);
+    ParseChannelFlow(root);
 
     PetscPrintf(PETSC_COMM_WORLD, "Successfully parsed XML configuration from '%s'\n", filename);
 

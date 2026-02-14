@@ -3,7 +3,7 @@
 #-rstart 2600
 #-rs_fsi 1
 -delete 1
--totalsteps 10000
+-totalsteps 10
 #-averaging 1
 
 -ren 62500
@@ -98,15 +98,15 @@
 -dgf_ay 0
 -dgf_az 0
 -str 0
--red_vel 0.897597901025655210 !ured 7
+-red_vel 0.897597901025655210 #ured 7
 -damp    0.0
 -mu_s    0.25
 -x_c     0.0
 -z_c     20.3
--y_c     0.0!vertical displacement
+-y_c     0.0#vertical displacement
 -x_r     0.
 -z_r     20.3
--y_r     0.086 !.086 + vertical displacement
+-y_r     0.086 #.086 + vertical displacement
 -body_mass 19.704
 -body_inertia_x 3.77
 -body_alpha_rot_x 0.04

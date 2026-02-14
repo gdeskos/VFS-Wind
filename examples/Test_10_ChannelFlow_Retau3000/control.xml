@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  VFS-Wind Configuration File
+  Test Case: Turbulent Channel Flow at Re_tau ~ 3000
+
+  This XML configuration is equivalent to the legacy control.dat file.
+  Use with: mpirun -np 4 ./vwis -xml control.xml
+-->
+<vfswind version="1.0">
+
+  <!-- Simulation Control -->
+  <simulation>
+    <timestep dt="0.001" totalsteps="10" output_interval="10"/>
+    <restart enabled="0" timestep="0"/>
+    <options delete_previous="1" second_order="1" laplacian="1" averaging="0"/>
+  </simulation>
+
+  <!-- Physics Parameters -->
+  <physics>
+    <reynolds_number>62500</reynolds_number>
+    <gravity x="0.0" y="-9.81" z="0.0"/>
+  </physics>
+
+  <!-- Turbulence Modeling -->
+  <turbulence>
+    <!-- LES with Dynamic Smagorinsky model -->
+    <les enabled="2" model="dynamic" cs="0.1" max_cs="0.2"/>
+    <rans enabled="0" model="k-omega-sst"/>
+    <wall_function enabled="1" channel_height="0.8"/>
+  </turbulence>
+
+  <!-- Two-Phase Flow (disabled for channel flow) -->
+  <levelset enabled="0">
+    <fluid0 density="1000" viscosity="1.0e-3"/>
+    <fluid1 density="1.2" viscosity="1.8e-5"/>
+    <iterations>4</iterations>
+  </levelset>
+
+  <!-- Solver Settings -->
+  <solvers>
+    <poisson type="1" iterations="12" tolerance="1.0e-12"/>
+    <momentum implicit="4" max_iterations="50" tolerance="1.0e-5"/>
+  </solvers>
+
+  <!-- Parallel/Domain Settings -->
+  <parallel>
+    <!-- Periodic in streamwise (ii/X) and spanwise (kk/Z) directions -->
+    <!-- Use ii/kk for channel flow (matches control.dat -ii_periodic and -kk_periodic) -->
+    <periodic ii="1" jj="0" kk="1"/>
+  </parallel>
+
+  <!-- Channel Flow Specific Settings -->
+  <channel_flow enabled="1" flux="1.3240512" inlet="1" perturb="1"/>
+
+  <!-- Output Settings -->
+  <!-- VTK output disabled - use ./data post-processor to convert binaries to VTK -->
+  <output>
+    <path>./</path>
+    <vtk enabled="0"/>
+    <binary enabled="0"/>
+  </output>
+
+  <!-- Grid and Boundary Files -->
+  <grid file="xyz.dat" format="xyz"/>
+  <boundaries file="bcs.dat"/>
+
+  <!-- Immersed Boundary (disabled) -->
+  <immersed_boundary enabled="0" bodies="1"/>
+
+</vfswind>

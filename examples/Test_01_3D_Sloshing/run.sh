@@ -1,7 +1,7 @@
 #!/bin/bash
 #=============================================================================
-# VFS-Wind Channel Flow Example Runner
-# Test Case: Turbulent Channel Flow at Re_tau ~ 3000
+# VFS-Wind 3D Sloshing Example Runner
+# Test Case: Two-Phase Sloshing Flow with Level Set Method
 #
 # Usage:
 #   ./run.sh              # Run full workflow (build, simulate, post-process)
@@ -26,9 +26,9 @@ NP_POST=${NP_POST:-1}
 USE_XML=${USE_XML:-0}
 
 # Timestep range for post-processing
-TIS=${TIS:-0}      # Starting timestep
-TIE=${TIE:-10}    # Ending timestep
-TS=${TS:-10}        # Timestep stride
+TIS=${TIS:-0}        # Starting timestep
+TIE=${TIE:-100}      # Ending timestep
+TS=${TS:-100}         # Timestep stride
 
 # Enable averaging output (0=off, 1=Reynolds stresses, 2=TKE only)
 AVG=${AVG:-0}
@@ -90,7 +90,7 @@ do_build() {
 
 # === SIMULATION FUNCTION ===
 do_simulate() {
-    print_header "Running Channel Flow Simulation"
+    print_header "Running 3D Sloshing Simulation"
 
     check_executable "${BUILD_DIR}/Source/vwis"
 
@@ -106,9 +106,10 @@ do_simulate() {
     fi
 
     print_step "Starting simulation with ${NP_SIM} MPI processes..."
-    echo "  Grid:      xyz.dat (121 x 41 x 61)"
-    echo "  Re:        62500"
-    echo "  LES Model: Dynamic Smagorinsky"
+    echo "  Grid:       xyz.dat (200 x 41 x 200)"
+    echo "  Re:         6666.67"
+    echo "  Physics:    Two-phase flow with Level Set"
+    echo "  Sloshing:   Mode 2"
     echo ""
 
     mpirun -np ${NP_SIM} "${BUILD_DIR}/Source/vwis" ${CONFIG_ARGS}
@@ -142,10 +143,16 @@ do_postprocess() {
     echo ""
 
     # Build post-processing command
-    POST_CMD="${BUILD_DIR}/Source/data -tis ${TIS} -tie ${TIE} -ts ${TS} -vtk 1 -xyz 1 -binary 0"
+    # Note: levelset=1 enables level set field output
+    POST_CMD="${BUILD_DIR}/Source/data -tis ${TIS} -tie ${TIE} -ts ${TS} -vtk 1 -xyz 1 -binary 0 -levelset 1"
 
     if [ "${AVG}" -gt 0 ]; then
         POST_CMD="${POST_CMD} -avg ${AVG}"
+    fi
+
+    # Add XML config if using XML
+    if [ "${USE_XML}" -eq 1 ] && [ -f "control.xml" ]; then
+        POST_CMD="${POST_CMD} -xml control.xml"
     fi
 
     mpirun -np ${NP_POST} ${POST_CMD}
@@ -171,6 +178,7 @@ do_clean() {
     rm -f ufield*.dat vfield*.dat pfield*.dat nvfield*.dat
     rm -f su0_*.dat su1_*.dat su2_*.dat sp_*.dat
     rm -f kfield*.dat lfield*.dat qfield*.dat
+    rm -f levelset*.dat
     rm -f *.info
 
     print_step "Removing VTK files..."
@@ -185,7 +193,7 @@ do_clean() {
 # === HELP FUNCTION ===
 do_help() {
     cat << EOF
-VFS-Wind Channel Flow Example Runner
+VFS-Wind 3D Sloshing Example Runner
 =====================================
 
 Usage: ./run.sh [command]
@@ -202,9 +210,9 @@ Environment Variables:
   NP_SIM       Number of MPI processes for simulation (default: 4)
   NP_POST      Number of MPI processes for post-processing (default: 1)
   USE_XML      Use XML config file (1) or control.dat (0) (default: 0)
-  TIS          Starting timestep for post-processing (default: 200)
-  TIE          Ending timestep for post-processing (default: 10000)
-  TS           Timestep stride for post-processing (default: 200)
+  TIS          Starting timestep for post-processing (default: 0)
+  TIE          Ending timestep for post-processing (default: 100)
+  TS           Timestep stride for post-processing (default: 10)
   AVG          Averaging mode: 0=off, 1=Reynolds stresses, 2=TKE (default: 0)
 
 Examples:
@@ -214,20 +222,32 @@ Examples:
   # Use XML configuration
   USE_XML=1 ./run.sh simulate
 
-  # Post-process with averaging
-  AVG=1 TIE=5000 ./run.sh postprocess
+  # Post-process specific timestep range
+  TIS=50 TIE=100 TS=5 ./run.sh postprocess
 
-  # Quick test run (modify control.dat/xml to reduce totalsteps first)
+  # Quick test run
   NP_SIM=2 ./run.sh
+
+Test Case Description:
+  This test case simulates 3D sloshing in a rectangular tank using the
+  Level Set method for two-phase flow. The simulation captures the
+  free surface motion of water sloshing in a container.
+
+  Physical parameters:
+    - Water density: 1000 kg/m^3
+    - Air density: 1 kg/m^3
+    - Water viscosity: 1.0e-3 Pa.s
+    - Air viscosity: 1.8e-5 Pa.s
+    - Gravity: -9.8 m/s^2 (y-direction)
 
 Output Files:
   Simulation:
     - ufield*.dat, pfield*.dat, etc. (PETSc binary format)
+    - lfield*.dat (level set field)
 
   Post-processing:
     - Result*.vts (VTK structured grid - open in ParaView)
     - Result*.vtm (VTK multi-block container)
-    - Result*-avg*.vts (averaged results, if AVG > 0)
 
 EOF
 }
@@ -258,7 +278,8 @@ case "${1:-all}" in
         echo "Next steps:"
         echo "  1. Open ParaView"
         echo "  2. File -> Open -> Select Result*.vts or Result*.vtm"
-        echo "  3. Apply filters to visualize velocity, pressure, etc."
+        echo "  3. Apply filters to visualize velocity, pressure, level set"
+        echo "  4. Use 'Contour' filter on Level set field to view free surface"
         echo ""
         ;;
     *)

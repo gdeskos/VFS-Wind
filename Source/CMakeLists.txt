@@ -126,63 +126,84 @@ if(ENABLE_TECPLOT)
     endif()
 endif()
 
-# Optional: data post-processing executable (requires Tecplot)
-# These executables have Tecplot dependencies that aren't properly guarded,
-# so they can only be built when ENABLE_TECPLOT is ON
-if(ENABLE_TECPLOT)
-    set(DATA_SOURCES data.c)
-    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/data.c)
-        add_executable(data ${DATA_SOURCES})
-        # Force C++ compilation (contains C++ code)
-        set_source_files_properties(${DATA_SOURCES} PROPERTIES LANGUAGE CXX)
-        target_include_directories(data PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}
-            ${MPI_CXX_INCLUDE_DIRS}
-            ${PETSC_INCLUDE_DIRS}
-            ${HYPRE_INCLUDE_DIRS}
-        )
-        target_link_directories(data PRIVATE ${PETSC_LIBRARY_DIRS})
-        target_link_libraries(data PRIVATE
-            ${PETSC_LIBRARIES}
-            ${HYPRE_LIBRARIES}
-            ${BLAS_LIBRARIES}
-            ${LAPACK_LIBRARIES}
-            MPI::MPI_CXX
-            MPI::MPI_C
-        )
-        target_compile_definitions(data PRIVATE NDEBUG TECIO)
-        if(TECPLOT_LIBRARY)
-            target_include_directories(data PRIVATE ${TECPLOT_INCLUDE_DIR})
-            target_link_libraries(data PRIVATE ${TECPLOT_LIBRARY})
-        endif()
-    endif()
+# Post-processing executable: data
+# VTK output works without Tecplot; Tecplot output requires ENABLE_TECPLOT
+set(DATA_SOURCES data.c)
 
-    # Optional: data05 post-processing executable
-    set(DATA05_SOURCES data05.c)
-    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/data05.c)
-        add_executable(data05 ${DATA05_SOURCES})
-        # Force C++ compilation (contains C++ code)
-        set_source_files_properties(${DATA05_SOURCES} PROPERTIES LANGUAGE CXX)
-        target_include_directories(data05 PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}
-            ${MPI_CXX_INCLUDE_DIRS}
-            ${PETSC_INCLUDE_DIRS}
-            ${HYPRE_INCLUDE_DIRS}
-        )
-        target_link_directories(data05 PRIVATE ${PETSC_LIBRARY_DIRS})
-        target_link_libraries(data05 PRIVATE
-            ${PETSC_LIBRARIES}
-            ${HYPRE_LIBRARIES}
-            ${BLAS_LIBRARIES}
-            ${LAPACK_LIBRARIES}
-            MPI::MPI_CXX
-            MPI::MPI_C
-        )
-        target_compile_definitions(data05 PRIVATE NDEBUG TECIO)
-        if(TECPLOT_LIBRARY)
-            target_include_directories(data05 PRIVATE ${TECPLOT_INCLUDE_DIR})
-            target_link_libraries(data05 PRIVATE ${TECPLOT_LIBRARY})
-        endif()
+# Add XML input support to data executable
+if(ENABLE_XML_INPUT)
+    list(APPEND DATA_SOURCES
+        tinyxml2/tinyxml2.cpp
+        xml_input.cpp
+    )
+endif()
+
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/data.c)
+    add_executable(data ${DATA_SOURCES})
+    # Force C++ compilation (contains C++ code)
+    set_source_files_properties(${DATA_SOURCES} PROPERTIES LANGUAGE CXX)
+    target_include_directories(data PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${MPI_CXX_INCLUDE_DIRS}
+        ${PETSC_INCLUDE_DIRS}
+        ${HYPRE_INCLUDE_DIRS}
+    )
+    target_link_directories(data PRIVATE ${PETSC_LIBRARY_DIRS})
+    target_link_libraries(data PRIVATE
+        ${PETSC_LIBRARIES}
+        ${HYPRE_LIBRARIES}
+        ${BLAS_LIBRARIES}
+        ${LAPACK_LIBRARIES}
+        MPI::MPI_CXX
+        MPI::MPI_C
+    )
+    target_compile_definitions(data PRIVATE NDEBUG)
+    target_compile_options(data PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-O3>
+    )
+    # Add XML input support if enabled
+    if(ENABLE_XML_INPUT)
+        target_compile_definitions(data PRIVATE ENABLE_XML_INPUT)
+    endif()
+    # Add Tecplot support if enabled
+    if(ENABLE_TECPLOT AND TECPLOT_LIBRARY)
+        target_compile_definitions(data PRIVATE TECIO)
+        target_include_directories(data PRIVATE ${TECPLOT_INCLUDE_DIR})
+        target_link_libraries(data PRIVATE ${TECPLOT_LIBRARY})
+    endif()
+    message(STATUS "Post-processing executable 'data' will be built (VTK output available)")
+endif()
+
+# Post-processing executable: data05 (legacy version)
+set(DATA05_SOURCES data05.c)
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/data05.c)
+    add_executable(data05 ${DATA05_SOURCES})
+    # Force C++ compilation (contains C++ code)
+    set_source_files_properties(${DATA05_SOURCES} PROPERTIES LANGUAGE CXX)
+    target_include_directories(data05 PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${MPI_CXX_INCLUDE_DIRS}
+        ${PETSC_INCLUDE_DIRS}
+        ${HYPRE_INCLUDE_DIRS}
+    )
+    target_link_directories(data05 PRIVATE ${PETSC_LIBRARY_DIRS})
+    target_link_libraries(data05 PRIVATE
+        ${PETSC_LIBRARIES}
+        ${HYPRE_LIBRARIES}
+        ${BLAS_LIBRARIES}
+        ${LAPACK_LIBRARIES}
+        MPI::MPI_CXX
+        MPI::MPI_C
+    )
+    target_compile_definitions(data05 PRIVATE NDEBUG)
+    target_compile_options(data05 PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-O3>
+    )
+    # Add Tecplot support if enabled
+    if(ENABLE_TECPLOT AND TECPLOT_LIBRARY)
+        target_compile_definitions(data05 PRIVATE TECIO)
+        target_include_directories(data05 PRIVATE ${TECPLOT_INCLUDE_DIR})
+        target_link_libraries(data05 PRIVATE ${TECPLOT_LIBRARY})
     endif()
 endif()
 

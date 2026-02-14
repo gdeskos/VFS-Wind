@@ -16,6 +16,10 @@ static char help[] = "Testing programming!";
 #include <stdio.h>
 #include <stdlib.h>
 
+#ifdef ENABLE_XML_INPUT
+#include "xml_input.h"
+#endif
+
 #define NEWMETRIC
 
 #ifdef TECIO
@@ -158,6 +162,7 @@ PetscErrorCode Velocity_Magnitude(UserCtx *user);
 PetscErrorCode Lambda2(UserCtx *user);
 PetscErrorCode FormMetrics(UserCtx *user);
 void Calc_avg_shear_stress(UserCtx *user);
+PetscErrorCode VtkOutputAveraging(UserCtx *user);
 
 PetscErrorCode VtkOutput(UserCtx *user, int only_V)
 {
@@ -487,6 +492,369 @@ PetscErrorCode VtkOutput(UserCtx *user, int only_V)
 
 	return(0);
 
+}
+
+PetscErrorCode VtkOutputAveraging(UserCtx *user)
+{
+	PetscInt	i, j, k, bi, numbytes;
+	Cmpnts		***coor;
+	Cmpnts		***usum, ***u1sum, ***u2sum;
+	PetscReal	***nvert, ***psum, ***p2sum;
+	Vec			Coor;
+	FILE		*f, *fblock;
+	char		filen[128], filen2[128];
+	PetscInt	rank;
+	size_t		offset = 0;
+
+	printf("Writing VTK Averaging Output\n");
+
+	MPI_Comm_rank(PETSC_COMM_WORLD, &rank);
+
+	double N = (double)tis + 1.0;
+
+	if (!rank) {
+
+		if (block_number > 0) {
+			sprintf(filen2, "%sResult%06d-avg.vtm", prefix, ti);
+			fblock = fopen(filen2, "w");
+
+			PetscFPrintf(PETSC_COMM_WORLD, fblock, "<VTKFile type=\"vtkMultiBlockDataSet\" version=\"1.0\" byte_order=\"LittleEndian\" header_type=\"UInt32\">\n");
+			PetscFPrintf(PETSC_COMM_WORLD, fblock, "  <vtkMultiBlockDataSet>\n");
+		}
+
+		for (bi=0; bi<block_number; bi++) {
+			DM			da   = user[bi].da;
+			DM			fda  = user[bi].fda;
+			DMDALocalInfo	info = user[bi].info;
+
+			PetscInt	xs = info.xs, xe = info.xs + info.xm;
+			PetscInt	ys = info.ys, ye = info.ys + info.ym;
+			PetscInt	zs = info.zs, ze = info.zs + info.zm;
+			PetscInt	mx = info.mx, my = info.my, mz = info.mz;
+
+			i_begin = 1, i_end = mx-1;
+			j_begin = 1, j_end = my-1;
+			k_begin = 1, k_end = mz-1;
+
+			PetscOptionsGetInt(NULL, NULL, "-i_begin", &i_begin, NULL);
+			PetscOptionsGetInt(NULL, NULL, "-i_end", &i_end, NULL);
+			PetscOptionsGetInt(NULL, NULL, "-j_begin", &j_begin, NULL);
+			PetscOptionsGetInt(NULL, NULL, "-j_end", &j_end, NULL);
+			PetscOptionsGetInt(NULL, NULL, "-k_begin", &k_begin, NULL);
+			PetscOptionsGetInt(NULL, NULL, "-k_end", &k_end, NULL);
+
+			xs = i_begin - 1, xe = i_end+1;
+			ys = j_begin - 1, ye = j_end+1;
+			zs = k_begin - 1, ze = k_end+1;
+
+			// Load averaging data
+			PetscViewer viewer;
+
+			DMCreateGlobalVector(user[bi].fda, &user[bi].Ucat_sum);
+			sprintf(filen, "su0_%06d_%1d.dat", ti, user[bi]._this);
+			PetscViewerBinaryOpen(PETSC_COMM_WORLD, filen, FILE_MODE_READ, &viewer);
+			VecLoad(user[bi].Ucat_sum, viewer);
+			PetscViewerDestroy(&viewer);
+
+			if (avg == 1) {
+				DMCreateGlobalVector(user[bi].fda, &user[bi].Ucat_cross_sum);
+				DMCreateGlobalVector(user[bi].fda, &user[bi].Ucat_square_sum);
+
+				sprintf(filen, "su1_%06d_%1d.dat", ti, user[bi]._this);
+				PetscViewerBinaryOpen(PETSC_COMM_WORLD, filen, FILE_MODE_READ, &viewer);
+				VecLoad(user[bi].Ucat_cross_sum, viewer);
+				PetscViewerDestroy(&viewer);
+
+				sprintf(filen, "su2_%06d_%1d.dat", ti, user[bi]._this);
+				PetscViewerBinaryOpen(PETSC_COMM_WORLD, filen, FILE_MODE_READ, &viewer);
+				VecLoad(user[bi].Ucat_square_sum, viewer);
+				PetscViewerDestroy(&viewer);
+
+				DMDAVecGetArray(user[bi].fda, user[bi].Ucat_cross_sum, &u1sum);
+				DMDAVecGetArray(user[bi].fda, user[bi].Ucat_square_sum, &u2sum);
+			}
+			else if (avg == 2) {
+				DMCreateGlobalVector(user[bi].fda, &user[bi].Ucat_square_sum);
+
+				sprintf(filen, "su2_%06d_%1d.dat", ti, user[bi]._this);
+				PetscViewerBinaryOpen(PETSC_COMM_WORLD, filen, FILE_MODE_READ, &viewer);
+				VecLoad(user[bi].Ucat_square_sum, viewer);
+				PetscViewerDestroy(&viewer);
+
+				DMDAVecGetArray(user[bi].fda, user[bi].Ucat_square_sum, &u2sum);
+			}
+
+			DMGetCoordinates(da, &Coor);
+			DMDAVecGetArray(fda, Coor, &coor);
+			DMDAVecGetArray(user[bi].da, user[bi].Nvert, &nvert);
+			DMDAVecGetArray(user[bi].fda, user[bi].Ucat_sum, &usum);
+
+			if (PETSC_REAL != PETSC_DOUBLE) {
+				printf("PETSC_REAL is not equal to PETSC_DOUBLE which conflicts with the vtk Output\n");
+				break;
+			}
+
+			sprintf(filen, "%sResult%06d-avg_%02d.vts", prefix, ti, bi);
+			f = fopen(filen, "w");
+
+			if (block_number > 0) {
+				PetscFPrintf(PETSC_COMM_WORLD, fblock, "    <DataSet index=\"%d\" file=\"%s\">\n", bi, filen);
+				PetscFPrintf(PETSC_COMM_WORLD, fblock, "    </DataSet>\n");
+			}
+
+			// VTK header
+			PetscFPrintf(PETSC_COMM_WORLD, f, "<VTKFile type=\"StructuredGrid\" version=\"1.0\" byte_order=\"LittleEndian\" header_type=\"UInt32\">\n");
+			PetscFPrintf(PETSC_COMM_WORLD, f, "  <StructuredGrid WholeExtent=\"%d %d %d %d %d %d\">\n", xs, xe-2, ys, ye-2, zs, ze-2);
+			PetscFPrintf(PETSC_COMM_WORLD, f, "    <Piece Extent=\"%d %d %d %d %d %d\">\n", xs, xe-2, ys, ye-2, zs, ze-2);
+
+			// Cell data header
+			PetscFPrintf(PETSC_COMM_WORLD, f, "      <CellData>\n");
+			offset = 0;
+
+			// Mean velocity (U, V, W as vector)
+			PetscFPrintf(PETSC_COMM_WORLD, f, "        <DataArray type=\"Float64\" Name=\"Umean\" NumberOfComponents=\"3\" format=\"appended\" offset=\"%zu\"/>\n", offset);
+			offset += (ze-2-zs)*(ye-2-ys)*(xe-2-xs)*sizeof(double)*3+sizeof(int);
+
+			if (avg == 1) {
+				// Reynolds stresses: uu, vv, ww
+				PetscFPrintf(PETSC_COMM_WORLD, f, "        <DataArray type=\"Float64\" Name=\"uu\" format=\"appended\" offset=\"%zu\"/>\n", offset);
+				offset += (ze-2-zs)*(ye-2-ys)*(xe-2-xs)*sizeof(double)+sizeof(int);
+				PetscFPrintf(PETSC_COMM_WORLD, f, "        <DataArray type=\"Float64\" Name=\"vv\" format=\"appended\" offset=\"%zu\"/>\n", offset);
+				offset += (ze-2-zs)*(ye-2-ys)*(xe-2-xs)*sizeof(double)+sizeof(int);
+				PetscFPrintf(PETSC_COMM_WORLD, f, "        <DataArray type=\"Float64\" Name=\"ww\" format=\"appended\" offset=\"%zu\"/>\n", offset);
+				offset += (ze-2-zs)*(ye-2-ys)*(xe-2-xs)*sizeof(double)+sizeof(int);
+				// Reynolds stresses: uv, vw, uw
+				PetscFPrintf(PETSC_COMM_WORLD, f, "        <DataArray type=\"Float64\" Name=\"uv\" format=\"appended\" offset=\"%zu\"/>\n", offset);
+				offset += (ze-2-zs)*(ye-2-ys)*(xe-2-xs)*sizeof(double)+sizeof(int);
+				PetscFPrintf(PETSC_COMM_WORLD, f, "        <DataArray type=\"Float64\" Name=\"vw\" format=\"appended\" offset=\"%zu\"/>\n", offset);
+				offset += (ze-2-zs)*(ye-2-ys)*(xe-2-xs)*sizeof(double)+sizeof(int);
+				PetscFPrintf(PETSC_COMM_WORLD, f, "        <DataArray type=\"Float64\" Name=\"uw\" format=\"appended\" offset=\"%zu\"/>\n", offset);
+				offset += (ze-2-zs)*(ye-2-ys)*(xe-2-xs)*sizeof(double)+sizeof(int);
+				// TKE
+				PetscFPrintf(PETSC_COMM_WORLD, f, "        <DataArray type=\"Float64\" Name=\"TKE\" format=\"appended\" offset=\"%zu\"/>\n", offset);
+				offset += (ze-2-zs)*(ye-2-ys)*(xe-2-xs)*sizeof(double)+sizeof(int);
+			}
+			else if (avg == 2) {
+				// TKE only
+				PetscFPrintf(PETSC_COMM_WORLD, f, "        <DataArray type=\"Float64\" Name=\"TKE\" format=\"appended\" offset=\"%zu\"/>\n", offset);
+				offset += (ze-2-zs)*(ye-2-ys)*(xe-2-xs)*sizeof(double)+sizeof(int);
+			}
+
+			// Nvert
+			PetscFPrintf(PETSC_COMM_WORLD, f, "        <DataArray type=\"Float64\" Name=\"Nvert\" format=\"appended\" offset=\"%zu\"/>\n", offset);
+			offset += (ze-2-zs)*(ye-2-ys)*(xe-2-xs)*sizeof(double)+sizeof(int);
+
+			PetscFPrintf(PETSC_COMM_WORLD, f, "      </CellData>\n");
+
+			// Points header
+			PetscFPrintf(PETSC_COMM_WORLD, f, "      <Points>\n");
+			PetscFPrintf(PETSC_COMM_WORLD, f, "        <DataArray type=\"Float64\" Name=\"Points\" NumberOfComponents=\"3\" format=\"appended\" offset=\"%zu\"/>\n", offset);
+			offset += (ze-1-zs)*(ye-1-ys)*(xe-1-xs)*sizeof(double)*3+sizeof(int);
+			PetscFPrintf(PETSC_COMM_WORLD, f, "      </Points>\n");
+
+			PetscFPrintf(PETSC_COMM_WORLD, f, "    </Piece>\n");
+			PetscFPrintf(PETSC_COMM_WORLD, f, "  </StructuredGrid>\n");
+			PetscFPrintf(PETSC_COMM_WORLD, f, "  <AppendedData encoding=\"raw\">\n_");
+
+			// Write mean velocity (U, V, W)
+			numbytes = sizeof(double)*(xe-2-xs)*(ye-2-ys)*(ze-2-zs)*3;
+			fwrite(&numbytes, sizeof(int), 1, f);
+			for (k=zs; k<ze-2; k++) {
+				for (j=ys; j<ye-2; j++) {
+					for (i=xs; i<xe-2; i++) {
+						double value[3];
+						value[0] = usum[k+1][j+1][i+1].x / N;
+						value[1] = usum[k+1][j+1][i+1].y / N;
+						value[2] = usum[k+1][j+1][i+1].z / N;
+						fwrite(value, sizeof(double), 3, f);
+					}
+				}
+			}
+
+			if (avg == 1) {
+				// uu
+				numbytes = sizeof(double)*(xe-2-xs)*(ye-2-ys)*(ze-2-zs);
+				fwrite(&numbytes, sizeof(int), 1, f);
+				for (k=zs; k<ze-2; k++) {
+					for (j=ys; j<ye-2; j++) {
+						for (i=xs; i<xe-2; i++) {
+							double U = usum[k+1][j+1][i+1].x / N;
+							double value = u2sum[k+1][j+1][i+1].x / N - U*U;
+							fwrite(&value, sizeof(double), 1, f);
+						}
+					}
+				}
+
+				// vv
+				numbytes = sizeof(double)*(xe-2-xs)*(ye-2-ys)*(ze-2-zs);
+				fwrite(&numbytes, sizeof(int), 1, f);
+				for (k=zs; k<ze-2; k++) {
+					for (j=ys; j<ye-2; j++) {
+						for (i=xs; i<xe-2; i++) {
+							double V = usum[k+1][j+1][i+1].y / N;
+							double value = u2sum[k+1][j+1][i+1].y / N - V*V;
+							fwrite(&value, sizeof(double), 1, f);
+						}
+					}
+				}
+
+				// ww
+				numbytes = sizeof(double)*(xe-2-xs)*(ye-2-ys)*(ze-2-zs);
+				fwrite(&numbytes, sizeof(int), 1, f);
+				for (k=zs; k<ze-2; k++) {
+					for (j=ys; j<ye-2; j++) {
+						for (i=xs; i<xe-2; i++) {
+							double W = usum[k+1][j+1][i+1].z / N;
+							double value = u2sum[k+1][j+1][i+1].z / N - W*W;
+							fwrite(&value, sizeof(double), 1, f);
+						}
+					}
+				}
+
+				// uv
+				numbytes = sizeof(double)*(xe-2-xs)*(ye-2-ys)*(ze-2-zs);
+				fwrite(&numbytes, sizeof(int), 1, f);
+				for (k=zs; k<ze-2; k++) {
+					for (j=ys; j<ye-2; j++) {
+						for (i=xs; i<xe-2; i++) {
+							double UV = usum[k+1][j+1][i+1].x * usum[k+1][j+1][i+1].y / (N*N);
+							double value = u1sum[k+1][j+1][i+1].x / N - UV;
+							fwrite(&value, sizeof(double), 1, f);
+						}
+					}
+				}
+
+				// vw
+				numbytes = sizeof(double)*(xe-2-xs)*(ye-2-ys)*(ze-2-zs);
+				fwrite(&numbytes, sizeof(int), 1, f);
+				for (k=zs; k<ze-2; k++) {
+					for (j=ys; j<ye-2; j++) {
+						for (i=xs; i<xe-2; i++) {
+							double VW = usum[k+1][j+1][i+1].y * usum[k+1][j+1][i+1].z / (N*N);
+							double value = u1sum[k+1][j+1][i+1].y / N - VW;
+							fwrite(&value, sizeof(double), 1, f);
+						}
+					}
+				}
+
+				// uw
+				numbytes = sizeof(double)*(xe-2-xs)*(ye-2-ys)*(ze-2-zs);
+				fwrite(&numbytes, sizeof(int), 1, f);
+				for (k=zs; k<ze-2; k++) {
+					for (j=ys; j<ye-2; j++) {
+						for (i=xs; i<xe-2; i++) {
+							double UW = usum[k+1][j+1][i+1].x * usum[k+1][j+1][i+1].z / (N*N);
+							double value = u1sum[k+1][j+1][i+1].z / N - UW;
+							fwrite(&value, sizeof(double), 1, f);
+						}
+					}
+				}
+
+				// TKE = 0.5*(uu + vv + ww)
+				numbytes = sizeof(double)*(xe-2-xs)*(ye-2-ys)*(ze-2-zs);
+				fwrite(&numbytes, sizeof(int), 1, f);
+				for (k=zs; k<ze-2; k++) {
+					for (j=ys; j<ye-2; j++) {
+						for (i=xs; i<xe-2; i++) {
+							double U = usum[k+1][j+1][i+1].x / N;
+							double V = usum[k+1][j+1][i+1].y / N;
+							double W = usum[k+1][j+1][i+1].z / N;
+							double uu = u2sum[k+1][j+1][i+1].x / N - U*U;
+							double vv = u2sum[k+1][j+1][i+1].y / N - V*V;
+							double ww = u2sum[k+1][j+1][i+1].z / N - W*W;
+							double value = 0.5 * (uu + vv + ww);
+							fwrite(&value, sizeof(double), 1, f);
+						}
+					}
+				}
+			}
+			else if (avg == 2) {
+				// TKE only
+				numbytes = sizeof(double)*(xe-2-xs)*(ye-2-ys)*(ze-2-zs);
+				fwrite(&numbytes, sizeof(int), 1, f);
+				for (k=zs; k<ze-2; k++) {
+					for (j=ys; j<ye-2; j++) {
+						for (i=xs; i<xe-2; i++) {
+							double U = usum[k+1][j+1][i+1].x / N;
+							double V = usum[k+1][j+1][i+1].y / N;
+							double W = usum[k+1][j+1][i+1].z / N;
+							double uu = u2sum[k+1][j+1][i+1].x / N - U*U;
+							double vv = u2sum[k+1][j+1][i+1].y / N - V*V;
+							double ww = u2sum[k+1][j+1][i+1].z / N - W*W;
+							double value = 0.5 * (uu + vv + ww);
+							fwrite(&value, sizeof(double), 1, f);
+						}
+					}
+				}
+			}
+
+			// Nvert
+			numbytes = sizeof(double)*(xe-2-xs)*(ye-2-ys)*(ze-2-zs);
+			fwrite(&numbytes, sizeof(int), 1, f);
+			for (k=zs; k<ze-2; k++) {
+				for (j=ys; j<ye-2; j++) {
+					for (i=xs; i<xe-2; i++) {
+						double value = nvert[k+1][j+1][i+1];
+						fwrite(&value, sizeof(double), 1, f);
+					}
+				}
+			}
+
+			// Coordinates
+			numbytes = sizeof(double)*(xe-1-xs)*(ye-1-ys)*(ze-1-zs)*3;
+			fwrite(&numbytes, sizeof(int), 1, f);
+			for (k=zs; k<ze-1; k++) {
+				for (j=ys; j<ye-1; j++) {
+					for (i=xs; i<xe-1; i++) {
+						double value[3];
+						value[0] = coor[k][j][i].x;
+						value[1] = coor[k][j][i].y;
+						value[2] = coor[k][j][i].z;
+						fwrite(value, sizeof(double), 3, f);
+					}
+				}
+			}
+
+			// Footer
+			PetscFPrintf(PETSC_COMM_WORLD, f, "  </AppendedData>\n");
+
+			// Cleanup arrays
+			DMDAVecRestoreArray(fda, Coor, &coor);
+			DMDAVecRestoreArray(user[bi].da, user[bi].Nvert, &nvert);
+			DMDAVecRestoreArray(user[bi].fda, user[bi].Ucat_sum, &usum);
+
+			if (avg == 1) {
+				DMDAVecRestoreArray(user[bi].fda, user[bi].Ucat_cross_sum, &u1sum);
+				DMDAVecRestoreArray(user[bi].fda, user[bi].Ucat_square_sum, &u2sum);
+			}
+			else if (avg == 2) {
+				DMDAVecRestoreArray(user[bi].fda, user[bi].Ucat_square_sum, &u2sum);
+			}
+
+			PetscFPrintf(PETSC_COMM_WORLD, f, "</VTKFile>\n");
+			fclose(f);
+
+			// Cleanup vectors
+			VecDestroy(&user[bi].Ucat_sum);
+			if (avg == 1) {
+				VecDestroy(&user[bi].Ucat_cross_sum);
+				VecDestroy(&user[bi].Ucat_square_sum);
+			}
+			else if (avg == 2) {
+				VecDestroy(&user[bi].Ucat_square_sum);
+			}
+
+		} // end block loop
+
+		if (block_number > 0) {
+			PetscFPrintf(PETSC_COMM_WORLD, fblock, "  </vtkMultiBlockDataSet>\n");
+			PetscFPrintf(PETSC_COMM_WORLD, fblock, "</VTKFile>\n");
+			fclose(fblock);
+		}
+
+	} // end if (!rank)
+
+	return 0;
 }
 
 int file_exist(char *str)
@@ -2615,8 +2983,28 @@ int main(int argc, char **argv)
 
 	PetscInitialize(&argc, &argv, (char *)0, help);
 
+	// Input file handling: XML or legacy control.dat
+#ifdef ENABLE_XML_INPUT
+	{
+		char xml_file[256] = "control.xml";
+		PetscBool xml_specified = PETSC_FALSE;
 
+		// Check for command-line override: -xml filename.xml
+		PetscOptionsGetString(NULL, NULL, "-xml", xml_file, sizeof(xml_file), &xml_specified);
+
+		if (xml_specified || xml_file_exists("control.xml")) {
+			PetscPrintf(PETSC_COMM_WORLD, "Reading XML configuration: %s\n", xml_file);
+			if (ParseXMLControlFile(xml_file) != 0) {
+				PetscPrintf(PETSC_COMM_WORLD, "Warning: Failed to parse XML file, falling back to control.dat\n");
+				PetscOptionsInsertFile(PETSC_COMM_WORLD, NULL, "control.dat", PETSC_TRUE);
+			}
+		} else {
+			PetscOptionsInsertFile(PETSC_COMM_WORLD, NULL, "control.dat", PETSC_TRUE);
+		}
+	}
+#else
 	PetscOptionsInsertFile(PETSC_COMM_WORLD, NULL, "control.dat", PETSC_TRUE);
+#endif
 
 
 	char tmp_str[256];
@@ -2795,7 +3183,8 @@ int main(int argc, char **argv)
 		}
 
 		if (!QCR) {
-			if (avg) TECIOOut_Averaging(user);
+			if (avg && vtkOutput) VtkOutputAveraging(user);
+			else if (avg) TECIOOut_Averaging(user);
 			else if (vtkOutput) VtkOutput(user, onlyV);
 			else TECIOOut_V(user, onlyV);
 		}
@@ -2874,11 +3263,13 @@ PetscErrorCode ReadCoordinates(UserCtx *user)
 			user[bi].IM+1, user[bi].JM+1, user[bi].KM+1, 1,1,
 			PETSC_DECIDE, 1, 2, NULL, NULL, NULL,
 			&(user[bi].da));
+		DMSetUp(user[bi].da);
 		if (rans) {
 			DMDACreate3d(PETSC_COMM_WORLD, DM_BOUNDARY_NONE, DM_BOUNDARY_NONE, DM_BOUNDARY_NONE, DMDA_STENCIL_BOX,
 				user[bi].IM+1, user[bi].JM+1, user[bi].KM+1, 1,1,
 				PETSC_DECIDE, 2, 2, NULL, NULL, NULL,
 				&(user[bi].fda2));
+			DMSetUp(user[bi].fda2);
 		}
 		DMDASetUniformCoordinates(user[bi].da, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0);
 		DMGetCoordinateDM(user[bi].da, &(user[bi].fda));
@@ -3460,7 +3851,7 @@ PetscErrorCode ibm_read(IBMNodes *ibm)
 
 	if (!rank) { // root processor read in the data
 		FILE *fd;
-		fd = fopen("ibmdata0", "r"); if (!fd) SETERRQ(PETSC_COMM_SELF, PETSC_ERR_FILE_OPEN, "Cannot open IBM node file")
+		fd = fopen("ibmdata0", "r"); if (!fd) SETERRQ(PETSC_COMM_SELF, PETSC_ERR_FILE_OPEN, "Cannot open IBM node file");
 		n_v =0;
 		fscanf(fd, "%i", &n_v);
 		fscanf(fd, "%i", &n_v);
@@ -3641,7 +4032,7 @@ PetscErrorCode ibm_read_ucd(IBMNodes *ibm)
 	if (!rank) { // root processor read in the data
 		FILE *fd;
 		fd = fopen("ibmdata", "r");
-		if (!fd) SETERRQ(PETSC_COMM_SELF, PETSC_ERR_FILE_OPEN, "Cannot open IBM node file")
+		if (!fd) SETERRQ(PETSC_COMM_SELF, PETSC_ERR_FILE_OPEN, "Cannot open IBM node file");
 		n_v =0;
 
 		if (fd) {
