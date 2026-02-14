@@ -1,254 +1,72 @@
-# VFS-Wind Modernization Guide
+# VFS-Wind
 
-This document describes the modernization of VFS-Wind to support modern dependencies (PETSc 3.20+, HYPRE 3.x) and build systems (CMake), with support for both Linux and macOS.
+VFS-Wind is a parallel CFD solver for incompressible flows using the Virtual Flow Simulator (VFS) methodology. It supports:
 
-## Summary of Changes
+- Large Eddy Simulation (LES) and RANS turbulence modeling
+- Two-phase flows via level set method
+- Immersed boundary methods for complex geometries
+- Fluid-structure interaction
+- Wind turbine rotor modeling
 
-### Build System: Makefile → CMake
+Built on PETSc for parallel scalability, VFS-Wind runs on laptops to HPC clusters.
 
-A new CMake build system was created to replace the legacy Makefile:
-
-- **`/CMakeLists.txt`** - Root CMake configuration
-- **`/Source/CMakeLists.txt`** - Source directory build configuration
-
-The original Makefile is preserved as `Source/makefile.legacy`.
-
-### PETSc API Migration (3.1 → 3.20+)
-
-The following API changes were made to support PETSc 3.20+:
-
-#### Type Renames
-| Old | New |
-|-----|-----|
-| `DA` | `DM` |
-| `DALocalInfo` | `DMDALocalInfo` |
-| `PetscTruth` | `PetscBool` |
-| `PassiveScalar` | `PetscScalar` |
-| `PETSC_NULL` | `NULL` |
-
-#### Function Renames
-| Old | New |
-|-----|-----|
-| `DACreate3d` | `DMDACreate3d` |
-| `DADestroy` | `DMDestroy` |
-| `DAVecGetArray` | `DMDAVecGetArray` |
-| `DAVecRestoreArray` | `DMDAVecRestoreArray` |
-| `DAGetInfo` | `DMDAGetInfo` |
-| `DALocalInfo` | `DMDALocalInfo` |
-| `DAGetLocalInfo` | `DMDAGetLocalInfo` |
-| `DAGlobalToLocalBegin/End` | `DMGlobalToLocalBegin/End` |
-| `DALocalToGlobalBegin/End` | `DMLocalToGlobalBegin/End` |
-| `DALocalToLocalBegin/End` | `DMLocalToLocalBegin/End` |
-| `DAGetCorners` | `DMDAGetCorners` |
-| `DAGetGhostCorners` | `DMDAGetGhostCorners` |
-| `DACreateGlobalVector` | `DMCreateGlobalVector` |
-| `DACreateLocalVector` | `DMCreateLocalVector` |
-| `DACreateNaturalVector` | `DMDACreateNaturalVector` |
-| `DAGlobalToNaturalBegin/End` | `DMDAGlobalToNaturalBegin/End` |
-| `DASetUniformCoordinates` | `DMDASetUniformCoordinates` |
-| `DAGetLocalVector` | `DMGetLocalVector` |
-| `DARestoreLocalVector` | `DMRestoreLocalVector` |
-| `DAGetGlobalIndices` | `ISLocalToGlobalMappingGetIndices` |
-| `PetscGetTime` | `PetscTime` |
-| `MatCreateMPIAIJ` | `MatCreateAIJ` |
-
-#### Signature Changes
-
-**DMDACreate3d**: The `wrap` parameter was split into three boundary type parameters:
-```c
-// Old (PETSc 3.1):
-DACreate3d(comm, wrap, stencil, M, N, P, m, n, p, dof, s, lx, ly, lz, &da)
-
-// New (PETSc 3.20+):
-DMDACreate3d(comm, bx, by, bz, stencil, M, N, P, m, n, p, dof, s, lx, ly, lz, &dm)
-```
-
-**DMDAGetInfo**: Added boundary type output parameters (14 arguments instead of 12).
-
-**DMSetUp**: Must be called after `DMDACreate3d` before using the DM:
-```c
-DMDACreate3d(..., &dm);
-DMSetUp(dm);  // Required in modern PETSc
-DMDASetUniformCoordinates(dm, ...);
-```
-
-**Destroy functions**: Now require pointer arguments:
-```c
-// Old:
-VecDestroy(vec);
-MatDestroy(mat);
-DMDestroy(dm);
-
-// New:
-VecDestroy(&vec);
-MatDestroy(&mat);
-DMDestroy(&dm);
-```
-
-**KSPSetOperators / PCSetOperators**: Removed 4th argument (MatStructure flag).
-
-**PetscOptionsGet***: Added prefix parameter:
-```c
-// Old:
-PetscOptionsGetString(NULL, "-option", str, len, &flg);
-
-// New:
-PetscOptionsGetString(NULL, NULL, "-option", str, len, &flg);
-```
-
-**PetscOptionsInsertFile**: Added second parameter.
-
-**PetscOptionsInsertString**: Added NULL first parameter.
-
-**SNES Solver Types**:
-- `SNESTR` → `SNESNEWTONTR`
-- Changed to `SNESNEWTONLS` for matrix-free compatibility
-
-**Null Space**:
-- `KSPSetNullSpace` → `MatSetNullSpace`
-
-**Removed Functions** (replaced with compatibility macros in `variables.h`):
-- `PetscGlobalSum` → `MPI_Allreduce` with `MPIU_SUM`
-- `PetscGlobalMax` → `MPI_Allreduce` with `MPIU_MAX`
-- `PetscGlobalMin` → `MPI_Allreduce` with `MPIU_MIN`
-
-#### Header Changes
-- `#include "petscda.h"` → `#include "petscdmda.h"`
-- `#include "petscmg.h"` → Removed (MG is now in `petscksp.h`)
-
-#### HYPRE Conditional Compilation
-PETSc's HYPRE interface (`PCHYPRESetType`, etc.) is now guarded with `#ifdef PETSC_HAVE_HYPRE` and falls back to GAMG when unavailable.
-
-### HYPRE API Migration (2.x → 3.x)
-
-HYPRE 3.x uses 64-bit integers for indices. The following changes were made in `poisson_hypre.c`:
-
-| Old Type | New Type |
-|----------|----------|
-| `int` (indices) | `HYPRE_BigInt` |
-| `int` (counts) | `HYPRE_Int` |
-| `double` (values) | `HYPRE_Complex` |
-
-### Input File Format Changes
-
-PETSc options files now use `#` for comments instead of `!`:
-```
-# This is a comment (new format)
--dt 0.001
-#-rstart 100  # commented out option
-```
-
-### BLAS/LAPACK
-
-Replaced discontinued ACML with system BLAS:
-- macOS: Uses Accelerate framework automatically
-- Linux: Uses OpenBLAS, MKL, or system BLAS
-
----
-
-## Compilation Instructions
-
-### Prerequisites
-
-#### macOS (Homebrew)
+## Quick Start
 
 ```bash
-# Install dependencies
-brew install cmake open-mpi petsc hypre openblas
-
-# Verify PETSc installation
-pkg-config --modversion PETSc
-```
-
-#### Linux (Ubuntu/Debian)
-
-```bash
-# Install dependencies
-sudo apt update
-sudo apt install cmake build-essential libopenmpi-dev
-sudo apt install petsc-dev libhypre-dev libopenblas-dev
-
-# Or install PETSc from source for more control
-```
-
-#### Linux (CentOS/RHEL)
-
-```bash
-sudo yum install cmake gcc gcc-c++ openmpi openmpi-devel
-sudo yum install petsc petsc-devel hypre hypre-devel openblas openblas-devel
-
-# Load MPI module if needed
-module load mpi/openmpi-x86_64
-```
-
-### Building VFS-Wind
-
-```bash
-# Clone or navigate to the repository
-cd /path/to/VFS-Wind
-
-# Configure with CMake
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-
 # Build
+cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 
-# The executable will be at: build/Source/vwis
+# Run a test case
+cd examples/Test_01_3D_Sloshing
+mpirun -np 4 ../../build/Source/vwis
 ```
 
-### CMake Options
+## Prerequisites
 
+**macOS (Homebrew):**
+```bash
+brew install cmake open-mpi petsc hypre openblas
+```
+
+**Linux (Ubuntu/Debian):**
+```bash
+sudo apt install cmake build-essential libopenmpi-dev petsc-dev libhypre-dev libopenblas-dev
+```
+
+**Linux (CentOS/RHEL):**
+```bash
+sudo yum install cmake gcc gcc-c++ openmpi openmpi-devel petsc petsc-devel hypre hypre-devel openblas openblas-devel
+```
+
+## Building
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
+```
+
+**Build targets:**
+| Target | Description |
+|--------|-------------|
+| `vwis` | Main solver |
+| `data` | Post-processing tool (converts output to VTK/Tecplot) |
+
+**CMake options:**
 | Option | Default | Description |
 |--------|---------|-------------|
 | `CMAKE_BUILD_TYPE` | Release | Build type (Release, Debug, RelWithDebInfo) |
-| `ENABLE_TECPLOT` | OFF | Enable Tecplot output support |
-| `ENABLE_XML_INPUT` | ON | Enable XML configuration file support |
-| `ENABLE_VTK_OUTPUT` | ON | Enable VTK output for ParaView |
+| `ENABLE_TECPLOT` | OFF | Tecplot output support |
+| `ENABLE_XML_INPUT` | ON | XML configuration file support |
+| `ENABLE_VTK_OUTPUT` | ON | VTK output for ParaView |
 | `CMAKE_PREFIX_PATH` | - | Custom paths for PETSc/HYPRE |
 
-### Build Targets
-
-| Target | Description |
-|--------|-------------|
-| `vwis` | Main VFS-Wind solver |
-| `data` | Post-processing tool (converts binary output to VTK/Tecplot) |
-| `data05` | Legacy post-processing tool |
-
-Example with custom PETSc location:
+**Custom PETSc location:**
 ```bash
-cmake -B build \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_PREFIX_PATH="/opt/petsc;/opt/hypre"
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="/opt/petsc;/opt/hypre"
 ```
-
-### Verifying the Build
-
-```bash
-# Check the executable
-file build/Source/vwis
-# Should show: Mach-O 64-bit executable (macOS) or ELF 64-bit (Linux)
-
-# Check linked libraries
-otool -L build/Source/vwis  # macOS
-ldd build/Source/vwis       # Linux
-```
-
----
 
 ## Running Simulations
-
-### Quick Start
-
-```bash
-# Navigate to a test case
-cd Instructional_Cases/Test_01_3D_Sloshing
-
-# Create grid.dat symlink if needed
-ln -sf xyz.dat grid.dat
-
-# Run with MPI (adjust -np for your system)
-mpirun -np 4 ../../build/Source/vwis
-```
 
 ### Input Files
 
@@ -612,31 +430,6 @@ mpirun -np 1 ./data -tis 10000 -tie 10000 -ts 200 -vtk 1 -avg 1
 
 ---
 
-## Files Modified
-
-### New Files
-- `/CMakeLists.txt`
-- `/Source/CMakeLists.txt`
-- `/README_MODERNIZATION.md`
-
-### Modified Source Files
-All `.c` files in `/Source/` were updated for PETSc API compatibility:
-- `bcs.c`, `bmv.c`, `compgeom.c`, `distance.c`, `fsi.c`, `fsi_move.c`
-- `ibm.c`, `ibm_io.c`, `implicitsolver.c`, `init.c`, `k-omega.c`
-- `les.c`, `level.c`, `main.c`, `metrics.c`, `momentum.c`
-- `poisson.c`, `poisson_hypre.c`, `rhs.c`, `rhs2.c`, `rotor_model.c`
-- `solvers.c`, `timeadvancing.c`, `timeadvancing1.c`, `variables.c`
-- `wallfunction.c`, `wave.c`
-
-### Modified Header Files
-- `/Source/variables.h` - Updated includes, types, and compatibility macros
-- `/Source/list.h` - Updated PETSc types
-
-### Test Case Files
-All `control.dat` files updated to use `#` comments.
-
----
-
 ## XML Input System
 
 VFS-Wind now supports structured XML configuration files as an alternative to the legacy `control.dat` format.
@@ -695,8 +488,7 @@ VFS-Wind now supports structured XML configuration files as an alternative to th
 </vfswind>
 ```
 
-### Usage
-
+**Usage:**
 ```bash
 # Auto-detect (uses control.xml if present, otherwise control.dat)
 mpirun -np 4 ./vwis
@@ -705,182 +497,45 @@ mpirun -np 4 ./vwis
 mpirun -np 4 ./vwis -xml myconfig.xml
 ```
 
-### CMake Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `ENABLE_XML_INPUT` | ON | Enable XML input file parsing (uses bundled TinyXML-2) |
-
-To disable XML support:
-```bash
-cmake -B build -DENABLE_XML_INPUT=OFF
-```
-
 ---
 
-## VTK Output System
+## VTK Output
 
-VFS-Wind now supports VTK XML output for direct visualization in ParaView and other VTK-compatible tools.
-
-### Features
-
-- **ParaView-compatible** - Native VTK XML Structured Grid format (.vts/.pvts)
-- **Parallel output** - Each MPI process writes its own piece; a collection file combines them
-- **Binary encoding** - Base64-encoded binary data for compact files
-- **Multiple fields** - Outputs coordinates, velocity, pressure, level set (if enabled), and blanking
-
-### Output Fields
-
-| Field | Components | Description |
-|-------|------------|-------------|
-| Coordinates | X, Y, Z | Grid point locations |
-| Velocity | U, V, W | Cartesian velocity components |
-| Pressure | scalar | Pressure field |
-| Levelset | scalar | Level set function (two-phase only) |
-| Nvert | scalar | Blanking/immersed boundary marker |
-
-### File Structure
-
-**Parallel output (multiple MPI processes):**
-```
-output_000100.pvts        # Collection file (rank 0 only)
-output_000100_p0.vts      # Process 0 data
-output_000100_p1.vts      # Process 1 data
-...
-```
-
-### Usage
-
-**Enable via XML configuration:**
-```xml
-<output>
-  <vtk enabled="1"/>
-</output>
-```
+VFS-Wind supports VTK XML output (.vts/.pvts) for direct visualization in ParaView.
 
 **Enable via command line:**
 ```bash
 mpirun -np 4 ./vwis -vtk_output 1
 ```
 
-**Options:**
-```bash
--vtk_output 1    # Enable VTK output (default: 0)
--vtk_binary 1    # Use binary encoding (default: 1, set to 0 for ASCII)
+**Or via XML configuration:**
+```xml
+<output>
+  <vtk enabled="1"/>
+</output>
 ```
 
-### Viewing in ParaView
-
-```bash
-# Open the parallel collection file
-paraview output_000100.pvts
-
-# Or for single-process runs
-paraview output_000100_p0.vts
-```
-
-### CMake Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `ENABLE_VTK_OUTPUT` | ON | Enable VTK XML output for ParaView |
-
-To disable VTK support:
-```bash
-cmake -B build -DENABLE_VTK_OUTPUT=OFF
-```
+**Output fields:** Coordinates, Velocity (U,V,W), Pressure, Levelset (two-phase), Nvert (blanking)
 
 ---
 
-## Post-Processing Tool (data)
+## Post-Processing Tool
 
-The `data` executable converts binary simulation output to visualization formats. It is built automatically with VFS-Wind and works **without requiring Tecplot**.
-
-### Building
-
-```bash
-cmake -B build
-cmake --build build --target data
-# Executable: build/Source/data
-```
-
-### Basic Usage
+The `data` executable converts simulation output to VTK/Tecplot formats.
 
 ```bash
 # Convert timesteps 0-50000 (every 100 steps) to VTK format
 mpirun -np 1 ./data -tis 0 -tie 50000 -ts 100 -vtk 1
-
-# Must match simulation settings:
-# -binary 0    # If simulation used ASCII output
-# -xyz 1       # If simulation used xyz.dat grid format
 ```
 
-### Command-Line Options
-
+**Options:**
 | Option | Description | Default |
 |--------|-------------|---------|
-| `-tis N` | Starting timestep index (required) | - |
-| `-tie N` | Ending timestep index | Same as tis |
+| `-tis N` | Starting timestep index | required |
+| `-tie N` | Ending timestep index | same as tis |
 | `-ts N` | Timestep stride | 5 |
-| `-vtk 1` | Enable VTK output (for ParaView) | 0 |
-| `-avg N` | Include averaged results (1, 2, or 3) | 0 |
-| `-binary N` | Binary input format (0=ASCII, 1=binary) | 0 |
+| `-vtk 1` | Enable VTK output | 0 |
+| `-avg N` | Include averaged results (1=full, 2=TKE only) | 0 |
+| `-binary N` | Binary input format | 0 |
 | `-xyz N` | Grid format (1=xyz.dat) | 0 |
-| `-qcr N` | Compute Q-criterion (1 or 2) | 0 |
-| `-rans N` | Include RANS fields (k, omega, nut) | 0 |
-| `-levelset N` | Include level set field | 0 |
-| `-prefix STR` | Output file prefix | "" |
-
-### Output Modes
-
-**Instantaneous VTK output:**
-```bash
-mpirun -np 1 ./data -tis 1000 -tie 5000 -ts 100 -vtk 1
-# Output: Result001000_00.vts, Result001100_00.vts, ...
-```
-
-**Averaged VTK output (requires simulation with -averaging enabled):**
-```bash
-mpirun -np 1 ./data -tis 5000 -vtk 1 -avg 1
-# Output: Result005000-avg_00.vts
-```
-
-| -avg Value | Output Fields |
-|------------|---------------|
-| 1 | Mean velocity (U,V,W), Reynolds stresses (uu,vv,ww,uv,vw,uw), TKE |
-| 2 | Mean velocity (U,V,W), TKE |
-| 3 | Same as 2, plus mean vorticity and vorticity fluctuations |
-
-**Tecplot output (requires ENABLE_TECPLOT=ON during build):**
-```bash
-mpirun -np 1 ./data -tis 1000 -tie 5000 -ts 100
-# Output: Result001000.plt, Result001100.plt, ...
-```
-
-### Output File Formats
-
-**VTK files (.vts, .vtm):**
-- `.vts` - VTK XML Structured Grid (per block)
-- `.vtm` - VTK Multi-Block container (multiple blocks)
-- Open directly in ParaView
-
-**Tecplot files (.plt):**
-- Binary Tecplot format
-- Requires Tecplot360 or compatible reader
-
----
-
-## New Files Added (Modernization)
-
-### XML Input System
-- `/Source/tinyxml2/tinyxml2.h` - TinyXML-2 library header (bundled)
-- `/Source/tinyxml2/tinyxml2.cpp` - TinyXML-2 library implementation (bundled)
-- `/Source/xml_input.h` - XML input parsing declarations
-- `/Source/xml_input.cpp` - XML input parsing implementation
-
-### VTK Output System
-- `/Source/vtk_output.h` - VTK output declarations
-- `/Source/vtk_output.cpp` - VTK output implementation
-
-### Example Files
-- `/examples/Test_01_3D_Sloshing/control.xml` - Example XML configuration
+| `-qcr N` | Compute Q-criterion | 0 |
