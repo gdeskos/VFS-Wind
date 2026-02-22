@@ -784,7 +784,97 @@ void ConvectionKernel_I(
 
 ---
 
-## Appendix C: References
+## Appendix C: AI-Assisted Implementation Timeline
+
+This section provides a realistic assessment of implementing the GPU port with AI coding assistance (e.g., Claude) combined with human expertise.
+
+### C.1 What AI Can Do Efficiently
+
+| Phase | Task | AI Coding Time | Notes |
+|-------|------|----------------|-------|
+| Phase 0 | CMake/Kokkos infrastructure | 2-4 hours | Requires human build verification |
+| Phase 1 | Convert kernels to Kokkos | 1-2 days | ~10-15 kernels, mechanical transformation |
+| Phase 2 | PETSc GPU configuration | 1-2 hours | Mostly configuration and options |
+| Phase 3 | IBM/FSI conversion | 1-2 days | Complex, needs iterative debugging |
+| Phase 4 | Level-set/turbulence | 1 day | Similar pattern to Phase 1 |
+
+**Total AI coding time: ~1-2 weeks of interactive sessions**
+
+### C.2 What Requires Human Expertise + Hardware
+
+The following tasks cannot be performed by AI and require actual GPU hardware:
+
+- **Compile and run on actual GPU** - AI cannot verify the code executes correctly
+- **Debug runtime GPU errors** - Memory issues, race conditions, kernel launch failures
+- **Performance profiling** - Identifying bottlenecks requires actual execution and profiling tools (nsys, nvprof, rocprof)
+- **Kernel tuning** - Block sizes, occupancy optimization, shared memory usage needs real hardware experimentation
+- **Integration testing** - Running full simulations and validating physical results
+- **Multi-GPU scaling** - MPI+GPU communication optimization
+
+### C.3 Realistic Combined Timeline
+
+| Phase | AI Coding | Human Testing & Debug | Total Elapsed |
+|-------|-----------|----------------------|---------------|
+| Phase 0: Infrastructure | 1 day | 1-2 days | ~3 days |
+| Phase 1: Core kernels | 2 days | 1-2 weeks | ~2 weeks |
+| Phase 2: Linear solvers | 1 day | 1 week | ~1.5 weeks |
+| Phase 3: IBM/FSI | 2 days | 2-3 weeks | ~3 weeks |
+| Phase 4: Level-set/Turbulence | 1 day | 1-2 weeks | ~2 weeks |
+| Phase 5: Optimization | - | 2-4 weeks | ~4 weeks |
+| **Total** | **~1-2 weeks** | **~2-3 months** | **~3-4 months** |
+
+### C.4 Recommended Workflow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    AI-Assisted Development Cycle                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   ┌──────────┐     ┌──────────┐     ┌──────────┐               │
+│   │   AI     │────▶│  Human   │────▶│  Human   │               │
+│   │  Writes  │     │  Builds  │     │  Tests   │               │
+│   │   Code   │     │  & Links │     │  on GPU  │               │
+│   └──────────┘     └──────────┘     └──────────┘               │
+│        │                                  │                     │
+│        │           ┌──────────┐           │                     │
+│        └───────────│   AI     │◀──────────┘                     │
+│                    │  Fixes   │                                 │
+│                    │  Issues  │                                 │
+│                    └──────────┘                                 │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Optimal approach:**
+1. AI generates initial GPU kernel code
+2. Human compiles and runs on GPU hardware
+3. Human reports errors/performance issues back to AI
+4. AI proposes fixes or optimizations
+5. Iterate until kernel is correct and performant
+
+### C.5 Accelerating the Timeline
+
+To minimize the 3-4 month timeline:
+
+1. **Parallel workstreams**: While Phase 1 kernels are being debugged, AI can start Phase 2 code
+2. **Continuous integration**: Set up GPU CI runners for automated testing
+3. **Reference implementations**: Use Nalu-Wind or similar codes as working examples
+4. **Incremental validation**: Test each kernel individually before integration
+5. **Performance baselines**: Establish CPU baselines early for comparison
+
+### C.6 Cost-Benefit Summary
+
+| Approach | Timeline | Human Effort | Risk |
+|----------|----------|--------------|------|
+| Traditional (no AI) | 12-18 months | Very High | Medium |
+| AI-assisted | 3-4 months | Medium | Low-Medium |
+| AI-assisted + experienced GPU dev | 2-3 months | Medium | Low |
+
+**Conclusion**: AI assistance can reduce the implementation timeline by **~70-80%** compared to traditional development, but human expertise with actual GPU hardware remains essential for testing, debugging, and optimization.
+
+---
+
+## Appendix D: References
 
 1. Kokkos Documentation: https://kokkos.github.io/kokkos-core-wiki/
 2. PETSc GPU Support: https://petsc.org/release/manual/gpu/
@@ -794,6 +884,6 @@ void ConvectionKernel_I(
 
 ---
 
-*Document Version: 1.0*
+*Document Version: 1.1*
 *Date: February 2026*
 *Author: VFS-Wind Development Team*
