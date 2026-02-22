@@ -405,6 +405,77 @@ static void ParseImmersedBoundary(XMLElement* root) {
     }
 }
 
+// Parse FSI (Fluid-Structure Interaction) section
+static void ParseFSI(XMLElement* root) {
+    XMLElement* fsi = root->FirstChildElement("fsi");
+    if (!fsi) return;
+
+    int enabled = 0;
+    if (fsi->QueryIntAttribute("enabled", &enabled) == XML_SUCCESS && enabled) {
+        SetPetscOptionInt("-fsi", 1);
+    }
+
+    // Forced motion mode
+    int forced_motion = 0;
+    if (fsi->QueryIntAttribute("forced_motion", &forced_motion) == XML_SUCCESS) {
+        SetPetscOptionInt("-forced_motion", forced_motion);
+    }
+
+    // Fall cylinder case
+    int fall_cylinder = 0;
+    if (fsi->QueryIntAttribute("fall_cylinder", &fall_cylinder) == XML_SUCCESS) {
+        SetPetscOptionInt("-fall_cyll_case", fall_cylinder);
+    }
+
+    // Center position
+    XMLElement* center = fsi->FirstChildElement("center");
+    if (center) {
+        double x = 0.0, y = 0.0, z = 0.0;
+        center->QueryDoubleAttribute("x", &x);
+        center->QueryDoubleAttribute("y", &y);
+        center->QueryDoubleAttribute("z", &z);
+        SetPetscOptionReal("-x_c", x);
+        SetPetscOptionReal("-y_c", y);
+        SetPetscOptionReal("-z_c", z);
+    }
+
+    // Degrees of freedom
+    XMLElement* dof = fsi->FirstChildElement("dof");
+    if (dof) {
+        int x = 0, y = 0, z = 0;
+        int ax = 0, ay = 0, az = 0;
+        dof->QueryIntAttribute("x", &x);
+        dof->QueryIntAttribute("y", &y);
+        dof->QueryIntAttribute("z", &z);
+        // Also support acceleration DOF (ax, ay, az) for falling cylinder
+        dof->QueryIntAttribute("ax", &ax);
+        dof->QueryIntAttribute("ay", &ay);
+        dof->QueryIntAttribute("az", &az);
+        SetPetscOptionInt("-dgf_x", x);
+        SetPetscOptionInt("-dgf_y", y);
+        SetPetscOptionInt("-dgf_z", z);
+    }
+
+    // Structural parameters
+    XMLElement* params = fsi->FirstChildElement("parameters");
+    if (params) {
+        double red_vel = 0.0;
+        if (params->QueryDoubleAttribute("reduced_velocity", &red_vel) == XML_SUCCESS) {
+            SetPetscOptionReal("-red_vel", red_vel);
+        }
+
+        double damping = 0.0;
+        if (params->QueryDoubleAttribute("damping", &damping) == XML_SUCCESS) {
+            SetPetscOptionReal("-damp", damping);
+        }
+
+        double mass_ratio = 0.0;
+        if (params->QueryDoubleAttribute("mass_ratio", &mass_ratio) == XML_SUCCESS) {
+            SetPetscOptionReal("-mu_s", mass_ratio);
+        }
+    }
+}
+
 // Parse channel flow section
 static void ParseChannelFlow(XMLElement* root) {
     XMLElement* channel = root->FirstChildElement("channel_flow");
@@ -488,6 +559,7 @@ extern "C" int ParseXMLControlFile(const char* filename) {
     ParseOutput(root);
     ParseFiles(root);
     ParseImmersedBoundary(root);
+    ParseFSI(root);
     ParseRotorModel(root);
     ParseChannelFlow(root);
 
