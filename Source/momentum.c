@@ -1130,7 +1130,7 @@ PetscErrorCode Formfunction_2(UserCtx *user, Vec Rhs, double scale)
 				wall_function_freesurface(nnu, sb, Ua, Ub, &ustar1, nj[0], nj[1], nj[2]);
 				nu_t_1=ustar1*ustar1/((Ub.z-Ua.z)/sb)-nnu;
 				nu_t_2=ustar2*ustar2/((Uc.z-Ua.z)/sc)-nnu;
-				if (i==mx/2 && k==mz/2) printf("nu_t=%f,nu_t_2=%f,ustar=%f,ustar2=%f\n",nu_t_1,nu_t_2,ustar1,ustar2);
+				//if (i==mx/2 && k==mz/2) printf("nu_t=%f,nu_t_2=%f,ustar=%f,ustar2=%f\n",nu_t_1,nu_t_2,ustar1,ustar2);
 				nu_t=nu_t_2;
 				//ustar[k][j+1][i]=ustar1;
 				if(nu_t<0.0)nu_t=0.;
@@ -1150,7 +1150,7 @@ PetscErrorCode Formfunction_2(UserCtx *user, Vec Rhs, double scale)
 				wall_function_freesurface(1./ren, sb, Ua, Ub, &ustar[k][j+1][i], nj[0], nj[1], nj[2]);
 				nu_t=ustar[k][j+1][i]*ustar[k][j+1][i]/(Ub.z/sb)-1./ren;
 				if(nu_t<0.0)nu_t=0.;
-				if (i==mx/2 && k==mz/2) printf("nu_t=%f,ustar=%f \n",nu_t,ustar[k][j+1][i]);
+				//if (i==mx/2 && k==mz/2) printf("nu_t=%f,ustar=%f \n",nu_t,ustar[k][j+1][i]);
 			}					
 			
 			
