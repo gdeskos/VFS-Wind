@@ -57,6 +57,7 @@ endif()
 if(ENABLE_GPU)
     list(APPEND VWIS_SOURCES
         gpu/kokkos_init.cpp
+        gpu/gpu_solver.cpp
     )
     message(STATUS "GPU support: ENABLED (backend: ${KOKKOS_BACKEND})")
 endif()

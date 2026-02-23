@@ -129,6 +129,7 @@ target_compile_definitions(test_regression PRIVATE
 # ============================================================================
 
 if(ENABLE_GPU)
+    # GPU Smoke Test
     add_executable(test_gpu_smoke
         gpu/test_gpu_smoke.cpp
         ${CMAKE_SOURCE_DIR}/Source/gpu/kokkos_init.cpp
@@ -149,7 +150,58 @@ if(ENABLE_GPU)
         PROPERTIES LABELS "gpu"
     )
 
-    message(STATUS "GPU tests: ENABLED")
+    # GPU Kernel Tests (Convection, Viscous, Pressure Gradient)
+    add_executable(test_gpu_kernels
+        gpu/test_kernels.cpp
+    )
+    target_include_directories(test_gpu_kernels PRIVATE
+        ${TEST_INCLUDE_DIRS}
+        ${CMAKE_SOURCE_DIR}/Source/gpu
+        ${CMAKE_SOURCE_DIR}/Source/gpu/kernels
+    )
+    target_link_directories(test_gpu_kernels PRIVATE ${TEST_LINK_DIRS})
+    target_link_libraries(test_gpu_kernels PRIVATE
+        ${TEST_LINK_LIBS}
+        Kokkos::kokkos
+    )
+    target_compile_definitions(test_gpu_kernels PRIVATE ENABLE_GPU)
+
+    gtest_discover_tests(test_gpu_kernels
+        TEST_PREFIX "gpu/kernels/"
+        PROPERTIES LABELS "gpu;kernels"
+    )
+
+    # GPU Solver Tests (Phase 2: Linear Solver GPU Acceleration)
+    add_executable(test_gpu_solver
+        gpu/test_gpu_solver.cpp
+        ${CMAKE_SOURCE_DIR}/Source/gpu/kokkos_init.cpp
+        ${CMAKE_SOURCE_DIR}/Source/gpu/gpu_solver.cpp
+    )
+    target_include_directories(test_gpu_solver PRIVATE
+        ${TEST_INCLUDE_DIRS}
+        ${CMAKE_SOURCE_DIR}/Source/gpu
+        ${CMAKE_SOURCE_DIR}/Source/gpu/kernels
+    )
+    target_link_directories(test_gpu_solver PRIVATE ${TEST_LINK_DIRS})
+    target_link_libraries(test_gpu_solver PRIVATE
+        ${TEST_LINK_LIBS}
+        Kokkos::kokkos
+    )
+    target_compile_definitions(test_gpu_solver PRIVATE ENABLE_GPU)
+
+    gtest_discover_tests(test_gpu_solver
+        TEST_PREFIX "gpu/solver/"
+        PROPERTIES LABELS "gpu;solver"
+    )
+
+    # Custom target to run GPU tests
+    add_custom_target(run_gpu_tests
+        COMMAND ${CMAKE_CTEST_COMMAND} -L gpu --output-on-failure
+        DEPENDS test_gpu_smoke test_gpu_kernels test_gpu_solver
+        COMMENT "Running GPU tests..."
+    )
+
+    message(STATUS "GPU tests: ENABLED (smoke + kernels + solver)")
 else()
     message(STATUS "GPU tests: DISABLED (use -DENABLE_GPU=ON to enable)")
 endif()

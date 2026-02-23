@@ -254,26 +254,168 @@ PETSC ERROR: Caught signal number 11 SEGV
 ```
 Source/
 ├── gpu/
-│   ├── gpu_config.hpp      # GPU configuration and type aliases
-│   ├── kokkos_init.cpp     # Kokkos initialization/finalization
-│   └── kokkos_init.h       # C interface header
-└── main.c                  # Modified to call GPU init/finalize
+│   ├── gpu_config.hpp           # GPU configuration and type aliases
+│   ├── gpu_solver.hpp           # GPU solver configuration (C++)
+│   ├── gpu_solver.h             # GPU solver configuration (C interface)
+│   ├── gpu_solver.cpp           # GPU solver implementation
+│   ├── kokkos_init.cpp          # Kokkos initialization/finalization
+│   ├── kokkos_init.h            # C interface header
+│   └── kernels/
+│       ├── kernels.hpp          # Unified kernel header
+│       ├── petsc_kokkos.hpp     # PETSc-Kokkos integration utilities
+│       ├── convection_kernel.hpp # QUICK scheme convection
+│       ├── viscous_kernel.hpp    # Viscous diffusion
+│       └── pressure_gradient_kernel.hpp # Pressure gradient
+└── main.c                       # Modified to call GPU init/finalize
 
 tests/
 └── gpu/
-    └── test_gpu_smoke.cpp  # GPU smoke tests
+    ├── test_gpu_smoke.cpp       # GPU smoke tests (10 tests)
+    ├── test_kernels.cpp         # Kernel unit tests (5 tests)
+    └── test_gpu_solver.cpp      # GPU solver tests (9 tests)
 ```
 
 ## Current Status
 
-**Phase 0 (Infrastructure)**: Complete
+**Phase 0 (Infrastructure)**: Complete ✓
 - CMake integration with Kokkos
 - GPU initialization/finalization
 - Smoke tests
+- macOS OpenMP support (Homebrew libomp)
 
-**Phase 1 (Core Kernels)**: Not started
-- Convection kernel
-- Viscous kernel
-- Pressure gradient
+**Phase 1 (Core Kernels)**: Complete ✓
+- Convection kernel (QUICK scheme)
+- Viscous kernel (with LES/RANS support)
+- Pressure gradient kernel
+- PETSc-Kokkos integration utilities
+- Kernel unit tests (5 tests passing)
+
+**Phase 2 (Linear Solvers)**: Complete ✓
+- GPU backend detection (CUDA, HIP, Kokkos, SYCL)
+- PETSc GPU vector/matrix type configuration
+- HYPRE GPU preconditioner options
+- DM and KSP GPU configuration utilities
+- C and C++ interface APIs
+- GPU solver unit tests (9 tests passing)
+
+**Phase 3 (IBM/FSI)**: Not started
+- Immersed Boundary Method GPU porting
+- Fluid-Structure Interaction GPU support
 
 See `docs/GPU_PORTING_PLAN.md` for full roadmap.
+
+## Using the GPU Kernels
+
+The GPU kernels are header-only and can be used as follows:
+
+```cpp
+#include "gpu/kernels/kernels.hpp"
+
+using namespace vfswind::gpu;
+using namespace vfswind::gpu::kernels;
+
+// Create domain info
+KernelDomainInfo domain = createDomainInfo(da, reynolds_number);
+
+// Allocate Kokkos Views
+VectorView3D<> ucont("ucont", NZ, NY, NX);
+VectorView3D<> ucat("ucat", NZ, NY, NX);
+ScalarView3D<> nvert("nvert", NZ, NY, NX);
+VectorView3D<> conv("conv", NZ, NY, NX);
+
+// Copy PETSc data to Kokkos Views
+copyPetscVectorToView(fda, lUcont, ucont);
+copyPetscVectorToView(fda, lUcat, ucat);
+copyPetscScalarToView(da, lNvert, nvert);
+
+// Execute kernel
+ConvectionKernel::execute(ucont, ucat, nvert, conv, domain);
+
+// Copy result back to PETSc
+copyViewToPetscVector(fda, conv, Conv);
+```
+
+## Using the GPU Solver
+
+### C++ Interface
+
+```cpp
+#include "gpu/gpu_solver.hpp"
+
+using namespace vfswind::gpu;
+
+// Print GPU solver configuration
+printGPUSolverInfo();
+
+// Apply GPU solver options (call before KSPCreate)
+GPUSolverConfig config;
+applyGPUSolverOptions(config);
+
+// Configure DM for GPU vectors/matrices
+configureDMForGPU(dm, config);
+
+// Configure KSP for GPU
+configureKSPForGPU(ksp, config);
+```
+
+### C Interface
+
+```c
+#include "gpu/gpu_solver.h"
+
+// Check GPU support
+if (VFSWind_HasGPUSolverSupport()) {
+    printf("GPU backend: %s\n", VFSWind_GetGPUBackendName());
+}
+
+// Apply GPU options (call early, before solver setup)
+VFSWind_ApplyGPUSolverOptions();
+
+// Configure DM for GPU
+VFSWind_ConfigureDMForGPU(dm);
+
+// Configure KSP for GPU
+VFSWind_ConfigureKSPForGPU(ksp);
+
+// Print configuration info
+VFSWind_PrintGPUSolverInfo();
+```
+
+### Runtime GPU Solver Options
+
+You can also configure GPU solvers via command-line options:
+
+```bash
+# NVIDIA CUDA
+mpirun -np 4 ./build/Source/vwis -xml control.xml \
+    -vec_type cuda \
+    -mat_type aijcusparse \
+    -dm_vec_type cuda \
+    -dm_mat_type aijcusparse \
+    -pc_type hypre \
+    -pc_hypre_boomeramg_device_level 1
+
+# AMD HIP/ROCm
+mpirun -np 4 ./build/Source/vwis -xml control.xml \
+    -vec_type hip \
+    -mat_type aijhipsparse \
+    -pc_type hypre
+
+# Kokkos (auto-detect backend)
+mpirun -np 4 ./build/Source/vwis -xml control.xml \
+    -vec_type kokkos \
+    -mat_type aijkokkos
+```
+
+## Running GPU Tests
+
+```bash
+# Build and run all GPU tests
+cmake --build build --target test_gpu_smoke test_gpu_kernels test_gpu_solver
+OMP_PROC_BIND=false ./build/tests/test_gpu_smoke
+OMP_PROC_BIND=false ./build/tests/test_gpu_kernels
+OMP_PROC_BIND=false ./build/tests/test_gpu_solver
+
+# Or use CTest
+cd build && ctest -L gpu --output-on-failure
+```
