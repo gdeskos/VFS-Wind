@@ -20,6 +20,9 @@
 #include "viscous_kernel.hpp"
 #include "pressure_gradient_kernel.hpp"
 
+// IBM kernels (Phase 3)
+#include "ibm_kernels.hpp"
+
 namespace vfswind {
 namespace gpu {
 

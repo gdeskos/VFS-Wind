@@ -194,14 +194,36 @@ if(ENABLE_GPU)
         PROPERTIES LABELS "gpu;solver"
     )
 
+    # GPU IBM Tests (Phase 3: Immersed Boundary Method)
+    add_executable(test_gpu_ibm
+        gpu/test_ibm_kernels.cpp
+        ${CMAKE_SOURCE_DIR}/Source/gpu/kokkos_init.cpp
+    )
+    target_include_directories(test_gpu_ibm PRIVATE
+        ${TEST_INCLUDE_DIRS}
+        ${CMAKE_SOURCE_DIR}/Source/gpu
+        ${CMAKE_SOURCE_DIR}/Source/gpu/kernels
+    )
+    target_link_directories(test_gpu_ibm PRIVATE ${TEST_LINK_DIRS})
+    target_link_libraries(test_gpu_ibm PRIVATE
+        ${TEST_LINK_LIBS}
+        Kokkos::kokkos
+    )
+    target_compile_definitions(test_gpu_ibm PRIVATE ENABLE_GPU)
+
+    gtest_discover_tests(test_gpu_ibm
+        TEST_PREFIX "gpu/ibm/"
+        PROPERTIES LABELS "gpu;ibm"
+    )
+
     # Custom target to run GPU tests
     add_custom_target(run_gpu_tests
         COMMAND ${CMAKE_CTEST_COMMAND} -L gpu --output-on-failure
-        DEPENDS test_gpu_smoke test_gpu_kernels test_gpu_solver
+        DEPENDS test_gpu_smoke test_gpu_kernels test_gpu_solver test_gpu_ibm
         COMMENT "Running GPU tests..."
     )
 
-    message(STATUS "GPU tests: ENABLED (smoke + kernels + solver)")
+    message(STATUS "GPU tests: ENABLED (smoke + kernels + solver + ibm)")
 else()
     message(STATUS "GPU tests: DISABLED (use -DENABLE_GPU=ON to enable)")
 endif()

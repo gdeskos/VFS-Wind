@@ -265,14 +265,19 @@ Source/
 │       ├── petsc_kokkos.hpp     # PETSc-Kokkos integration utilities
 │       ├── convection_kernel.hpp # QUICK scheme convection
 │       ├── viscous_kernel.hpp    # Viscous diffusion
-│       └── pressure_gradient_kernel.hpp # Pressure gradient
+│       ├── pressure_gradient_kernel.hpp # Pressure gradient
+│       ├── ibm_types.hpp         # IBM GPU data structures
+│       ├── ibm_interpolation_kernel.hpp # IBM velocity interpolation
+│       ├── ibm_force_kernel.hpp  # IBM force spreading
+│       └── ibm_kernels.hpp       # IBM unified header
 └── main.c                       # Modified to call GPU init/finalize
 
 tests/
 └── gpu/
     ├── test_gpu_smoke.cpp       # GPU smoke tests (10 tests)
     ├── test_kernels.cpp         # Kernel unit tests (5 tests)
-    └── test_gpu_solver.cpp      # GPU solver tests (9 tests)
+    ├── test_gpu_solver.cpp      # GPU solver tests (9 tests)
+    └── test_ibm_kernels.cpp     # IBM kernel tests (9 tests)
 ```
 
 ## Current Status
@@ -298,9 +303,19 @@ tests/
 - C and C++ interface APIs
 - GPU solver unit tests (9 tests passing)
 
-**Phase 3 (IBM/FSI)**: Not started
-- Immersed Boundary Method GPU porting
-- Fluid-Structure Interaction GPU support
+**Phase 3 (IBM/FSI)**: Complete ✓
+- GPU-friendly IBM data structures (SoA layout)
+- IBM velocity interpolation kernel
+- IBM force spreading kernel (with delta functions)
+- Direct forcing method implementation
+- No-slip and free-slip boundary conditions
+- IBM kernel unit tests (9 tests passing)
+
+**Phase 4 (Level-Set/Turbulence)**: Not started
+- Level-set advection (WENO schemes)
+- Level-set reinitialization
+- LES models (Smagorinsky, dynamic)
+- RANS models (k-omega SST)
 
 See `docs/GPU_PORTING_PLAN.md` for full roadmap.
 
