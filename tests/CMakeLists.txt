@@ -19,6 +19,9 @@ FetchContent_MakeAvailable(googletest)
 
 enable_testing()
 
+# Include GoogleTest module for gtest_discover_tests
+include(GoogleTest)
+
 # Common include directories for all tests
 set(TEST_INCLUDE_DIRS
     ${CMAKE_SOURCE_DIR}/Source
@@ -122,10 +125,38 @@ target_compile_definitions(test_regression PRIVATE
 )
 
 # ============================================================================
-# Register tests with CTest
+# GPU TESTS (optional, only when ENABLE_GPU is ON)
 # ============================================================================
 
-include(GoogleTest)
+if(ENABLE_GPU)
+    add_executable(test_gpu_smoke
+        gpu/test_gpu_smoke.cpp
+        ${CMAKE_SOURCE_DIR}/Source/gpu/kokkos_init.cpp
+    )
+    target_include_directories(test_gpu_smoke PRIVATE
+        ${TEST_INCLUDE_DIRS}
+        ${CMAKE_SOURCE_DIR}/Source/gpu
+    )
+    target_link_directories(test_gpu_smoke PRIVATE ${TEST_LINK_DIRS})
+    target_link_libraries(test_gpu_smoke PRIVATE
+        ${TEST_LINK_LIBS}
+        Kokkos::kokkos
+    )
+    target_compile_definitions(test_gpu_smoke PRIVATE ENABLE_GPU)
+
+    gtest_discover_tests(test_gpu_smoke
+        TEST_PREFIX "gpu/"
+        PROPERTIES LABELS "gpu"
+    )
+
+    message(STATUS "GPU tests: ENABLED")
+else()
+    message(STATUS "GPU tests: DISABLED (use -DENABLE_GPU=ON to enable)")
+endif()
+
+# ============================================================================
+# Register tests with CTest
+# ============================================================================
 
 # Unit tests
 gtest_discover_tests(test_compgeom

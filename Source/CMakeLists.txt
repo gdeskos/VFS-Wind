@@ -53,6 +53,14 @@ if(ENABLE_VTK_OUTPUT)
     )
 endif()
 
+# GPU/Kokkos support (optional)
+if(ENABLE_GPU)
+    list(APPEND VWIS_SOURCES
+        gpu/kokkos_init.cpp
+    )
+    message(STATUS "GPU support: ENABLED (backend: ${KOKKOS_BACKEND})")
+endif()
+
 # Create vwis executable
 add_executable(vwis ${VWIS_SOURCES})
 
@@ -62,6 +70,7 @@ set_source_files_properties(${VWIS_SOURCES} PROPERTIES LANGUAGE CXX)
 # Include directories
 target_include_directories(vwis PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/gpu
     ${MPI_CXX_INCLUDE_DIRS}
     ${PETSC_INCLUDE_DIRS}
     ${HYPRE_INCLUDE_DIRS}
@@ -81,6 +90,19 @@ target_link_libraries(vwis PRIVATE
     MPI::MPI_CXX
     MPI::MPI_C
 )
+
+# Link Kokkos if GPU is enabled
+if(ENABLE_GPU)
+    target_link_libraries(vwis PRIVATE Kokkos::kokkos)
+    # On macOS with OpenMP backend, explicitly link libomp
+    if(APPLE AND KOKKOS_BACKEND STREQUAL "OPENMP")
+        if(EXISTS "/opt/homebrew/opt/libomp/lib/libomp.dylib")
+            target_link_libraries(vwis PRIVATE "/opt/homebrew/opt/libomp/lib/libomp.dylib")
+        elseif(EXISTS "/usr/local/opt/libomp/lib/libomp.dylib")
+            target_link_libraries(vwis PRIVATE "/usr/local/opt/libomp/lib/libomp.dylib")
+        endif()
+    endif()
+endif()
 
 # Compile definitions
 target_compile_definitions(vwis PRIVATE NDEBUG)

@@ -7,6 +7,11 @@
 ******************************************************************/
 
 #include "variables.h"
+
+#ifdef ENABLE_GPU
+#include "gpu/kokkos_init.h"
+#endif
+
 static char help[] = "Testing programming!";
 PetscReal COEF_TIME_ACCURACY=1.5;
 PetscInt ti,tistart=0;
@@ -1363,6 +1368,11 @@ int main(int argc, char **argv)
 	PetscInitialize(&argc, &argv, (char *)0, help);
 	PetscBarrier(NULL);
 
+#ifdef ENABLE_GPU
+	// Initialize GPU/Kokkos runtime
+	VFSWind_GPU_Initialize(&argc, &argv);
+#endif
+
 	MPI_Comm_rank(PETSC_COMM_WORLD, &my_rank);
 	srand( time(NULL)) ;	// Seokkoo Kang
 
@@ -2677,6 +2687,12 @@ int main(int argc, char **argv)
 	/* ==================================================================================             */
   PetscPrintf(PETSC_COMM_WORLD, "\n\n ******* Finished computation ti=%d ******* \n\n", ti);
   MG_Finalize(&usermg);
+
+#ifdef ENABLE_GPU
+  // Finalize GPU/Kokkos runtime
+  VFSWind_GPU_Finalize();
+#endif
+
   PetscFinalize();
 	/* ==================================================================================             */
   return(0);
