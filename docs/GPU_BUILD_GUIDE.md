@@ -269,7 +269,11 @@ Source/
 │       ├── ibm_types.hpp         # IBM GPU data structures
 │       ├── ibm_interpolation_kernel.hpp # IBM velocity interpolation
 │       ├── ibm_force_kernel.hpp  # IBM force spreading
-│       └── ibm_kernels.hpp       # IBM unified header
+│       ├── ibm_kernels.hpp       # IBM unified header
+│       ├── levelset_kernel.hpp   # Level-set advection (WENO schemes)
+│       ├── les_kernel.hpp        # LES turbulence models
+│       ├── rans_kernel.hpp       # RANS k-omega models
+│       └── turbulence_kernels.hpp # Phase 4 unified header
 └── main.c                       # Modified to call GPU init/finalize
 
 tests/
@@ -277,7 +281,8 @@ tests/
     ├── test_gpu_smoke.cpp       # GPU smoke tests (10 tests)
     ├── test_kernels.cpp         # Kernel unit tests (5 tests)
     ├── test_gpu_solver.cpp      # GPU solver tests (9 tests)
-    └── test_ibm_kernels.cpp     # IBM kernel tests (9 tests)
+    ├── test_ibm_kernels.cpp     # IBM kernel tests (9 tests)
+    └── test_phase4_kernels.cpp  # Level-set & turbulence tests (17 tests)
 ```
 
 ## Current Status
@@ -311,11 +316,17 @@ tests/
 - No-slip and free-slip boundary conditions
 - IBM kernel unit tests (9 tests passing)
 
-**Phase 4 (Level-Set/Turbulence)**: Not started
-- Level-set advection (WENO schemes)
-- Level-set reinitialization
-- LES models (Smagorinsky, dynamic)
-- RANS models (k-omega SST)
+**Phase 4 (Level-Set/Turbulence)**: Complete ✓
+- Level-set advection with WENO3/WENO5 schemes
+- Level-set reinitialization (signed distance)
+- Two-phase property computation (Heaviside smoothing)
+- LES: Static and Dynamic Smagorinsky models
+- LES: van Driest wall damping
+- RANS: k-omega Wilcox (Low-Re and High-Re)
+- RANS: k-omega SST (Menter) with F1/F2 blending
+- Phase 4 kernel unit tests (17 tests passing)
+
+**Total GPU Tests**: 50 passing
 
 See `docs/GPU_PORTING_PLAN.md` for full roadmap.
 
@@ -426,11 +437,91 @@ mpirun -np 4 ./build/Source/vwis -xml control.xml \
 
 ```bash
 # Build and run all GPU tests
-cmake --build build --target test_gpu_smoke test_gpu_kernels test_gpu_solver
-OMP_PROC_BIND=false ./build/tests/test_gpu_smoke
-OMP_PROC_BIND=false ./build/tests/test_gpu_kernels
-OMP_PROC_BIND=false ./build/tests/test_gpu_solver
+cmake --build build --target run_gpu_tests
+
+# Or run individual test suites
+OMP_PROC_BIND=false ./build/tests/test_gpu_smoke      # 10 tests
+OMP_PROC_BIND=false ./build/tests/test_gpu_kernels    # 5 tests
+OMP_PROC_BIND=false ./build/tests/test_gpu_solver     # 9 tests
+OMP_PROC_BIND=false ./build/tests/test_gpu_ibm        # 9 tests
+OMP_PROC_BIND=false ./build/tests/test_gpu_phase4     # 17 tests
 
 # Or use CTest
 cd build && ctest -L gpu --output-on-failure
+```
+
+## Using Level-Set Kernels
+
+```cpp
+#include "gpu/kernels/turbulence_kernels.hpp"
+
+using namespace vfswind::gpu;
+using namespace vfswind::gpu::levelset;
+
+// Advect level-set with WENO3
+LevelsetKernel::advect(
+    levelset, ucont, nvert, aj, dt, domain,
+    LevelsetAdvectionKernel::Scheme::WENO3
+);
+
+// Reinitialize to signed distance function
+int iters = LevelsetKernel::reinitialize(
+    levelset, nvert, aj, h, domain, max_iter, tol
+);
+
+// Compute two-phase properties
+LevelsetKernel::computeProperties(
+    levelset, rho, mu, rho1, rho2, mu1, mu2, epsilon, domain
+);
+```
+
+## Using Turbulence Model Kernels
+
+### LES (Smagorinsky)
+
+```cpp
+#include "gpu/kernels/turbulence_kernels.hpp"
+
+using namespace vfswind::gpu;
+
+// Static Smagorinsky model
+TurbulenceKernel::computeTurbulentViscosity(
+    ucat, nvert, csi, eta, zet, aj, nu_t, domain,
+    TurbulenceModel::LES_STATIC_SMAGORINSKY,
+    Re_nu, Cs_constant
+);
+
+// Dynamic Smagorinsky model
+TurbulenceKernel::computeTurbulentViscosity(
+    ucat, nvert, csi, eta, zet, aj, nu_t, domain,
+    TurbulenceModel::LES_DYNAMIC_SMAGORINSKY,
+    Re_nu
+);
+```
+
+### RANS (k-omega)
+
+```cpp
+#include "gpu/kernels/rans_kernel.hpp"
+
+using namespace vfswind::gpu::rans;
+
+// Compute SST blending function F1
+KOmegaKernel::computeF1(k, omega, distance, nvert, F1, Re_nu, domain);
+
+// Compute turbulent viscosity (SST model)
+KOmegaKernel::computeTurbulentViscosity(
+    k, omega, nvert, F1, nu_t, Re_nu,
+    RANSModel::SST_MENTER, domain
+);
+
+// Compute k-omega RHS (production, dissipation, cross-diffusion)
+KOmegaKernel::computeRHS(
+    ucat, ucont, k, omega, nu_t, nvert, F1,
+    csi, eta, zet, aj, k_rhs, omega_rhs,
+    Re_nu, RANSModel::SST_MENTER, domain
+);
+
+// Apply wall boundary conditions
+KOmegaKernel::applyWallBC(k, omega, distance, nvert, Re_nu, domain);
 ```

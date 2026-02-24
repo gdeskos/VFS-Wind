@@ -23,6 +23,9 @@
 // IBM kernels (Phase 3)
 #include "ibm_kernels.hpp"
 
+// Level-set and Turbulence kernels (Phase 4)
+#include "turbulence_kernels.hpp"
+
 namespace vfswind {
 namespace gpu {
 

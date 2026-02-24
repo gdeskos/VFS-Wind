@@ -216,14 +216,36 @@ if(ENABLE_GPU)
         PROPERTIES LABELS "gpu;ibm"
     )
 
+    # GPU Phase 4 Tests (Level-Set and Turbulence)
+    add_executable(test_gpu_phase4
+        gpu/test_phase4_kernels.cpp
+        ${CMAKE_SOURCE_DIR}/Source/gpu/kokkos_init.cpp
+    )
+    target_include_directories(test_gpu_phase4 PRIVATE
+        ${TEST_INCLUDE_DIRS}
+        ${CMAKE_SOURCE_DIR}/Source/gpu
+        ${CMAKE_SOURCE_DIR}/Source/gpu/kernels
+    )
+    target_link_directories(test_gpu_phase4 PRIVATE ${TEST_LINK_DIRS})
+    target_link_libraries(test_gpu_phase4 PRIVATE
+        ${TEST_LINK_LIBS}
+        Kokkos::kokkos
+    )
+    target_compile_definitions(test_gpu_phase4 PRIVATE ENABLE_GPU)
+
+    gtest_discover_tests(test_gpu_phase4
+        TEST_PREFIX "gpu/phase4/"
+        PROPERTIES LABELS "gpu;phase4;levelset;turbulence"
+    )
+
     # Custom target to run GPU tests
     add_custom_target(run_gpu_tests
         COMMAND ${CMAKE_CTEST_COMMAND} -L gpu --output-on-failure
-        DEPENDS test_gpu_smoke test_gpu_kernels test_gpu_solver test_gpu_ibm
+        DEPENDS test_gpu_smoke test_gpu_kernels test_gpu_solver test_gpu_ibm test_gpu_phase4
         COMMENT "Running GPU tests..."
     )
 
-    message(STATUS "GPU tests: ENABLED (smoke + kernels + solver + ibm)")
+    message(STATUS "GPU tests: ENABLED (smoke + kernels + solver + ibm + phase4)")
 else()
     message(STATUS "GPU tests: DISABLED (use -DENABLE_GPU=ON to enable)")
 endif()
