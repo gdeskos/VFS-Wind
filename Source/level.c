@@ -6,8 +6,66 @@
 *                                                                *
 ******************************************************************/
 
+/*=========================================================================
+ * LEVEL-SET METHOD FOR TWO-PHASE FLOWS
+ *=========================================================================
+ *
+ * This file implements the level-set method for tracking interfaces
+ * in two-phase flow simulations.
+ *
+ * LEVEL-SET EQUATION:
+ * -------------------
+ *   ∂φ/∂t + u·∇φ = 0     (Advection)
+ *
+ * where φ is the signed distance function:
+ *   φ < 0 : Fluid 1 (e.g., liquid)
+ *   φ > 0 : Fluid 2 (e.g., gas)
+ *   φ = 0 : Interface
+ *
+ * MAIN FUNCTIONS:
+ * ---------------
+ * - Advect_Levelset(): Advect level-set field using RK2 time integration
+ * - Levelset_Advect_RHS(): Compute advection RHS using WENO3/WENO5 schemes
+ * - Reinitialize_Levelset(): Restore signed distance property |∇φ|=1
+ * - Compute_Density_Mu(): Compute density/viscosity from level-set
+ * - Compute_Surface_Tension(): Compute surface tension force
+ *
+ * NUMERICAL SCHEMES:
+ * ------------------
+ * - WENO3: 3rd order Weighted ENO (default)
+ * - WENO5: 5th order Weighted ENO (higher accuracy)
+ * - ENO2:  2nd order ENO (simpler, faster)
+ *
+ * The schemes use upwind-biased stencils for stability.
+ *
+ * TWO-PHASE PROPERTIES:
+ * ---------------------
+ * Density and viscosity are computed using smoothed Heaviside:
+ *   ρ = ρ₁ + (ρ₂ - ρ₁) × H_ε(φ)
+ *   μ = μ₁ + (μ₂ - μ₁) × H_ε(φ)
+ *
+ * where H_ε is a smoothed Heaviside function over interface thickness ε.
+ *
+ * GPU ACCELERATION:
+ * -----------------
+ * When compiled with ENABLE_GPU, level-set operations can be offloaded
+ * to GPU using Kokkos for significant speedup.
+ *
+ * To enable GPU: cmake -DENABLE_GPU=ON -DKOKKOS_BACKEND=CUDA ..
+ *
+ *========================================================================*/
+
 // llevel for periodicity !!
 #include "variables.h"
+
+/*-------------------------------------------------------------------------
+ * GPU DISPATCH HEADER
+ *-------------------------------------------------------------------------
+ * Include GPU dispatch functions when GPU support is enabled.
+ *------------------------------------------------------------------------*/
+#ifdef ENABLE_GPU
+#include "gpu/gpu_dispatch.h"
+#endif
 
 double dtau_levelset;
 extern Vec LevelSet, LevelSet0, LevelSet_o;
@@ -1702,29 +1760,90 @@ void Levelset_Advect_RHS(UserCtx *user, Vec DRHS)
 	//DMLocalToGlobal(user->da, user->lLevelset, INSERT_VALUES, user->Levelset);
 }
 
+/*=========================================================================
+ * Advect_Levelset: Advect Level-Set Field in Time
+ *=========================================================================
+ *
+ * Uses 2nd order Runge-Kutta (RK2/Heun's method) time integration:
+ *
+ *   Stage 1: φ* = φⁿ + dt × RHS(φⁿ)
+ *   Stage 2: φⁿ⁺¹ = φⁿ + 0.5×dt × [RHS(φⁿ) + RHS(φ*)]
+ *
+ * This provides 2nd order temporal accuracy while maintaining stability.
+ *
+ * The RHS is computed using high-order WENO spatial discretization
+ * (see Levelset_Advect_RHS for details).
+ *
+ * GPU ACCELERATION:
+ * -----------------
+ * When ENABLE_GPU is defined, the entire advection step (including
+ * RK2 stages) can be performed on GPU.
+ *
+ *========================================================================*/
 void Advect_Levelset(UserCtx *user, double dt)
 {
+	DM da = user->da;
+
+	/*=====================================================================
+	 * GPU PATH: Dispatch to GPU kernel if available
+	 *=====================================================================
+	 * The GPU kernel performs complete RK2 advection with WENO schemes.
+	 *====================================================================*/
+#ifdef ENABLE_GPU
+	if (VFSWind_GPU_IsAvailable()) {
+		/*
+		 * GPU dispatch: VFSWind_GPU_AdvectLevelset
+		 *
+		 * Performs complete level-set advection on GPU:
+		 * - WENO3/WENO5 spatial discretization
+		 * - RK2 time integration
+		 * - Updates user->Levelset in place
+		 */
+		int gpu_err = VFSWind_GPU_AdvectLevelset(
+			da, user->fda,
+			user->Levelset,
+			user->lUcont,
+			user->lAj,
+			user->lNvert,
+			dt,
+			LEVELSET_WENO3  /* Default to WENO3 scheme */
+		);
+
+		if (gpu_err == 0) {
+			/* GPU success - update local vector and return */
+			DMGlobalToLocalBegin(da, user->Levelset, INSERT_VALUES, user->lLevelset);
+			DMGlobalToLocalEnd(da, user->Levelset, INSERT_VALUES, user->lLevelset);
+			return;
+		}
+		PetscPrintf(PETSC_COMM_WORLD, "GPU level-set advection failed, using CPU\n");
+	}
+#endif
+
+	/*=====================================================================
+	 * CPU PATH: Original RK2 implementation
+	 *=====================================================================*/
 
 	//VecCopy(user->Levelset, user->Levelset_o);
 	Vec R0, R1;
 	VecDuplicate(user->Levelset, &R0);	// allocation
 	VecDuplicate(user->Levelset, &R1);	// allocation
-	
+
+	/* RK2 Stage 1: Compute RHS at current state */
 	Levelset_Advect_RHS(user, R0);
 	VecAXPY(user->Levelset, dt, R0);        /* U(1) = U(n) + dt * RHS(n) */
-	
-	VecWAXPY(user->Levelset, dt, R0, user->Levelset_o);	
+
+	/* RK2 Stage 2: Compute RHS at intermediate state, combine */
+	VecWAXPY(user->Levelset, dt, R0, user->Levelset_o);
 	Levelset_Advect_RHS(user, R1);
 	VecWAXPY(user->Levelset, 0.5*dt, R0, user->Levelset_o);
 	VecAXPY(user->Levelset, 0.5*dt, R1);
-	
+
 	VecDestroy(&R0);		// free
 	VecDestroy(&R1);		// free
-	
-	DMGlobalToLocalBegin(user->da, user->Levelset, INSERT_VALUES, user->lLevelset);
-	DMGlobalToLocalEnd(user->da, user->Levelset, INSERT_VALUES, user->lLevelset);
-	
-	
+
+	/* Update ghost cells for next iteration */
+	DMGlobalToLocalBegin(da, user->Levelset, INSERT_VALUES, user->lLevelset);
+	DMGlobalToLocalEnd(da, user->Levelset, INSERT_VALUES, user->lLevelset);
 }
 void Compute_Surface_Tension(UserCtx *user)
 {

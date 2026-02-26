@@ -43,6 +43,8 @@ if(ENABLE_XML_INPUT)
     list(APPEND VWIS_SOURCES
         tinyxml2/tinyxml2.cpp
         xml_input.cpp
+        mesh_generator.cpp
+        mesh_generator_xml.cpp
     )
 endif()
 
@@ -58,6 +60,7 @@ if(ENABLE_GPU)
     list(APPEND VWIS_SOURCES
         gpu/kokkos_init.cpp
         gpu/gpu_solver.cpp
+        gpu/gpu_dispatch.cpp
     )
     message(STATUS "GPU support: ENABLED (backend: ${KOKKOS_BACKEND})")
 endif()
@@ -195,6 +198,19 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/data.c)
         target_link_libraries(data PRIVATE ${TECPLOT_LIBRARY})
     endif()
     message(STATUS "Post-processing executable 'data' will be built (VTK output available)")
+endif()
+
+# Mesh generator tool (requires XML input)
+if(ENABLE_XML_INPUT)
+    add_executable(mesh_gen
+        mesh_gen_tool.cpp
+        mesh_generator.cpp
+        mesh_generator_xml.cpp
+        tinyxml2/tinyxml2.cpp
+    )
+    target_include_directories(mesh_gen PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_options(mesh_gen PRIVATE -O3)
+    message(STATUS "Mesh generator tool 'mesh_gen' will be built")
 endif()
 
 # Post-processing executable: data05 (legacy version - requires Tecplot)

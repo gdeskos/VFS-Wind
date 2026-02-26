@@ -245,7 +245,46 @@ if(ENABLE_GPU)
         COMMENT "Running GPU tests..."
     )
 
-    message(STATUS "GPU tests: ENABLED (smoke + kernels + solver + ibm + phase4)")
+    # GPU Timing Tests
+    add_executable(test_gpu_timing
+        gpu/test_timing.cpp
+        ${CMAKE_SOURCE_DIR}/Source/gpu/kokkos_init.cpp
+        ${CMAKE_SOURCE_DIR}/Source/gpu/gpu_dispatch.cpp
+    )
+    target_include_directories(test_gpu_timing PRIVATE
+        ${TEST_INCLUDE_DIRS}
+        ${CMAKE_SOURCE_DIR}/Source/gpu
+    )
+    target_link_directories(test_gpu_timing PRIVATE ${TEST_LINK_DIRS})
+    target_link_libraries(test_gpu_timing PRIVATE
+        ${TEST_LINK_LIBS}
+        Kokkos::kokkos
+    )
+    target_compile_definitions(test_gpu_timing PRIVATE ENABLE_GPU)
+
+    gtest_discover_tests(test_gpu_timing
+        TEST_PREFIX "gpu/timing/"
+        PROPERTIES LABELS "gpu;timing"
+    )
+
+    # GPU Benchmark executable (for performance testing)
+    add_executable(test_gpu_benchmark
+        ${CMAKE_SOURCE_DIR}/benchmarks/test_gpu_benchmark.cpp
+        ${CMAKE_SOURCE_DIR}/Source/gpu/kokkos_init.cpp
+    )
+    target_include_directories(test_gpu_benchmark PRIVATE
+        ${TEST_INCLUDE_DIRS}
+        ${CMAKE_SOURCE_DIR}/Source/gpu
+        ${CMAKE_SOURCE_DIR}/Source/gpu/kernels
+    )
+    target_link_directories(test_gpu_benchmark PRIVATE ${TEST_LINK_DIRS})
+    target_link_libraries(test_gpu_benchmark PRIVATE
+        ${TEST_LINK_LIBS}
+        Kokkos::kokkos
+    )
+    target_compile_definitions(test_gpu_benchmark PRIVATE ENABLE_GPU)
+
+    message(STATUS "GPU tests: ENABLED (smoke + kernels + solver + ibm + phase4 + timing + benchmark)")
 else()
     message(STATUS "GPU tests: DISABLED (use -DENABLE_GPU=ON to enable)")
 endif()

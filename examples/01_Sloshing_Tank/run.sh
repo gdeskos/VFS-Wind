@@ -23,12 +23,18 @@ NP_SIM=${NP_SIM:-4}
 NP_POST=${NP_POST:-1}
 
 # Use XML config (1) or legacy control.dat (0)
-USE_XML=${USE_XML:-0}
+USE_XML=${USE_XML:-1}
+
+# Enable GPU acceleration (1=on, 0=off) - uses Kokkos for portable GPU kernels
+ENABLE_GPU=${ENABLE_GPU:-1}
+
+# Number of OpenMP threads for GPU backend (0=auto-detect)
+OMP_THREADS=${OMP_THREADS:-0}
 
 # Timestep range for post-processing
 TIS=${TIS:-0}        # Starting timestep
 TIE=${TIE:-100}      # Ending timestep
-TS=${TS:-100}         # Timestep stride
+TS=${TS:-10}         # Timestep stride
 
 # Enable averaging output (0=off, 1=Reynolds stresses, 2=TKE only)
 AVG=${AVG:-0}
@@ -66,7 +72,14 @@ do_build() {
     cd "${VFSWIND_ROOT}"
 
     print_step "Configuring with CMake..."
-    cmake -B build -DCMAKE_BUILD_TYPE=Release
+    CMAKE_ARGS="-DCMAKE_BUILD_TYPE=Release"
+    if [ "${ENABLE_GPU}" -eq 1 ]; then
+        CMAKE_ARGS="${CMAKE_ARGS} -DENABLE_GPU=ON"
+        echo "  GPU acceleration: ENABLED (Kokkos)"
+    else
+        echo "  GPU acceleration: DISABLED"
+    fi
+    cmake -B build ${CMAKE_ARGS}
 
     if [ $? -ne 0 ]; then
         echo "ERROR: CMake configuration failed!"
@@ -105,11 +118,24 @@ do_simulate() {
         echo "Using legacy configuration: control.dat"
     fi
 
+    # Set OpenMP threads for GPU backend
+    if [ "${OMP_THREADS}" -gt 0 ]; then
+        export OMP_NUM_THREADS=${OMP_THREADS}
+    elif [ -z "${OMP_NUM_THREADS}" ]; then
+        # Auto-detect: use number of performance cores
+        export OMP_NUM_THREADS=$(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+    fi
+
     print_step "Starting simulation with ${NP_SIM} MPI processes..."
     echo "  Grid:       xyz.dat (200 x 41 x 200)"
     echo "  Re:         6666.67"
     echo "  Physics:    Two-phase flow with Level Set"
     echo "  Sloshing:   Mode 2"
+    if [ "${ENABLE_GPU}" -eq 1 ]; then
+        echo "  GPU:        ENABLED (OMP_NUM_THREADS=${OMP_NUM_THREADS})"
+    else
+        echo "  GPU:        DISABLED"
+    fi
     echo ""
 
     mpirun -np ${NP_SIM} "${BUILD_DIR}/Source/vwis" ${CONFIG_ARGS}
@@ -209,18 +235,26 @@ Commands:
 Environment Variables:
   NP_SIM       Number of MPI processes for simulation (default: 4)
   NP_POST      Number of MPI processes for post-processing (default: 1)
-  USE_XML      Use XML config file (1) or control.dat (0) (default: 0)
+  USE_XML      Use XML config file (1) or control.dat (0) (default: 1)
+  ENABLE_GPU   Enable GPU acceleration (1=on, 0=off) (default: 1)
+  OMP_THREADS  Number of OpenMP threads for GPU backend (default: auto)
   TIS          Starting timestep for post-processing (default: 0)
   TIE          Ending timestep for post-processing (default: 100)
   TS           Timestep stride for post-processing (default: 10)
   AVG          Averaging mode: 0=off, 1=Reynolds stresses, 2=TKE (default: 0)
 
 Examples:
-  # Run with 8 MPI processes
+  # Run with 8 MPI processes (GPU enabled by default)
   NP_SIM=8 ./run.sh simulate
 
-  # Use XML configuration
-  USE_XML=1 ./run.sh simulate
+  # Run with GPU disabled (CPU only)
+  ENABLE_GPU=0 ./run.sh simulate
+
+  # Run with specific number of OpenMP threads
+  OMP_THREADS=8 ./run.sh simulate
+
+  # Use legacy control.dat instead of XML
+  USE_XML=0 ./run.sh simulate
 
   # Post-process specific timestep range
   TIS=50 TIE=100 TS=5 ./run.sh postprocess

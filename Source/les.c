@@ -6,10 +6,59 @@
 *                                                                *
 ******************************************************************/
 
+/*=========================================================================
+ * LES TURBULENCE MODELS
+ *=========================================================================
+ *
+ * This file implements Large Eddy Simulation (LES) turbulence models
+ * for the VFS-Wind solver.
+ *
+ * SUPPORTED MODELS:
+ * -----------------
+ * 1. Static Smagorinsky (les=1):
+ *    - Uses fixed Cs constant (~0.1)
+ *    - ν_t = (Cs × Δ)² × |S|
+ *
+ * 2. Dynamic Smagorinsky (les=2):
+ *    - Computes Cs dynamically using Germano identity
+ *    - Cs² = <L_ij M_ij> / <M_ij M_ij>
+ *    - Uses test filtering at 2Δ scale
+ *
+ * CODE FLOW:
+ * ----------
+ * 1. Flow_Solver() calls Compute_Smagorinsky_Constant_1() periodically
+ *    to update the dynamic Cs field (stored in user->lCs)
+ *
+ * 2. Flow_Solver() calls Compute_eddy_viscosity_LES() every timestep
+ *    to compute ν_t from Cs and strain rate
+ *
+ * 3. The eddy viscosity ν_t is added to molecular viscosity in the
+ *    viscous term computation (Viscous() in rhs.c)
+ *
+ * GPU ACCELERATION:
+ * -----------------
+ * When compiled with ENABLE_GPU, the computationally intensive loops
+ * can be offloaded to GPU using Kokkos. The GPU dispatch functions
+ * (VFSWind_GPU_*) handle data transfer automatically.
+ *
+ * To enable GPU: cmake -DENABLE_GPU=ON -DKOKKOS_BACKEND=CUDA ..
+ *
+ *========================================================================*/
+
 #include "variables.h"
 #include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
+
+/*-------------------------------------------------------------------------
+ * GPU DISPATCH HEADER
+ *-------------------------------------------------------------------------
+ * Include GPU dispatch functions when GPU support is enabled.
+ * These provide C-callable wrappers for the Kokkos GPU kernels.
+ *------------------------------------------------------------------------*/
+#ifdef ENABLE_GPU
+#include "gpu/gpu_dispatch.h"
+#endif
 
 extern double integrate_hat(int np, double *val, double *w);
 extern double integrate_testfilter_i(double val[3][3][3], double vol[3][3][3]);
@@ -1140,26 +1189,123 @@ void Compute_Smagorinsky_Constant_1(UserCtx *user, Vec Ucont, Vec Ucat)
 	
 };
 
+/*=========================================================================
+ * Compute_eddy_viscosity_LES
+ *=========================================================================
+ *
+ * PURPOSE:
+ * --------
+ * Computes the turbulent eddy viscosity (ν_t) for LES using the
+ * Smagorinsky model:
+ *
+ *   ν_t = Cs × Δ² × |S|
+ *
+ * Where:
+ *   Cs  = Smagorinsky constant (from user->lCs, computed dynamically or fixed)
+ *   Δ   = Filter width = (cell volume)^(1/3) = (1/aj)^(1/3)
+ *   |S| = Strain rate magnitude = sqrt(2 × S_ij × S_ij)
+ *
+ * INPUTS:
+ * -------
+ *   user->lUcat  : Local Cartesian velocity field
+ *   user->lCsi   : ξ metric vector (∂x/∂ξ, ∂y/∂ξ, ∂z/∂ξ)
+ *   user->lEta   : η metric vector
+ *   user->lZet   : ζ metric vector
+ *   user->lAj    : Jacobian of coordinate transformation
+ *   user->lNvert : Solid cell marker (0=fluid, >0=solid)
+ *   user->lCs    : Smagorinsky constant field
+ *
+ * OUTPUTS:
+ * --------
+ *   user->lNu_t  : Turbulent eddy viscosity field
+ *
+ * GPU ACCELERATION:
+ * -----------------
+ * When ENABLE_GPU is defined and GPU is available, this function
+ * dispatches the computation to a GPU kernel for parallel execution.
+ * The GPU path handles all data transfers automatically.
+ *
+ * ALGORITHM (CPU path):
+ * ---------------------
+ * For each fluid cell (i,j,k):
+ *   1. Compute velocity gradients in computational space (dudc, dude, dudz, etc.)
+ *   2. Transform to physical space gradients (du/dx, du/dy, du/dz, etc.)
+ *   3. Compute symmetric strain rate tensor S_ij
+ *   4. Compute strain rate magnitude |S| = sqrt(2 × S_ij × S_ij)
+ *   5. Compute filter width Δ = (1/aj)^(1/3)
+ *   6. Compute ν_t = Cs × Δ² × |S|
+ *
+ *========================================================================*/
 void Compute_eddy_viscosity_LES(UserCtx *user)
 {
 	DM		da = user->da, fda = user->fda;
 	DMDALocalInfo	info;
-	PetscInt	xs, xe, ys, ye, zs, ze; // Local grid information
-	PetscInt	mx, my, mz; // Dimensions in three directions
+	PetscInt	xs, xe, ys, ye, zs, ze; /* Local grid information */
+	PetscInt	mx, my, mz; /* Dimensions in three directions */
 	PetscInt	i, j, k;
-	
+	PetscInt	lxs, lxe, lys, lye, lzs, lze; /* Loop bounds (excluding ghosts) */
+
 	PetscReal ***Cs, ***lnu_t, ***nvert, ***aj, ***ustar;
 	Cmpnts ***csi, ***eta, ***zet, ***ucat;
-	
+	int gpu_path_taken = 0;  /* Flag to track if GPU path was used */
+
+	/*=====================================================================
+	 * GPU PATH: Dispatch to GPU kernel if available
+	 *=====================================================================
+	 * The GPU kernel performs the same computation but in parallel on GPU.
+	 * Data transfer between PETSc vectors and GPU memory is handled
+	 * automatically by the dispatch function.
+	 *====================================================================*/
+#ifdef ENABLE_GPU
+	if (VFSWind_GPU_IsAvailable()) {
+		/*
+		 * GPU dispatch: VFSWind_GPU_ComputeEddyViscosityLES
+		 *
+		 * This function:
+		 * 1. Copies PETSc vectors to Kokkos views on GPU
+		 * 2. Executes parallel kernel computing ν_t for all cells
+		 * 3. Copies result back to user->lNu_t
+		 *
+		 * Returns 0 on success, non-zero on error (falls back to CPU)
+		 */
+		int gpu_err = VFSWind_GPU_ComputeEddyViscosityLES(
+			da, fda,
+			user->lUcat,
+			user->lCsi, user->lEta, user->lZet,
+			user->lAj,
+			user->lNvert,
+			user->lCs,
+			user->lNu_t
+		);
+
+		if (gpu_err == 0) {
+			/* GPU computation successful - skip CPU path */
+			/* Note: Wall function treatment still done on CPU below if needed */
+			gpu_path_taken = 1;
+			goto wall_function_treatment;
+		}
+		/* GPU failed - fall through to CPU path */
+		PetscPrintf(PETSC_COMM_WORLD, "GPU LES kernel failed, using CPU fallback\n");
+	}
+#endif
+
+	/*=====================================================================
+	 * CPU PATH: Original implementation
+	 *=====================================================================
+	 * This is the standard CPU implementation using nested loops.
+	 * Used when GPU is not available or GPU dispatch fails.
+	 *====================================================================*/
+
 	DMDAGetLocalInfo(da, &info);
 	mx = info.mx, my = info.my, mz = info.mz;
 	xs = info.xs, xe = xs + info.xm;
 	ys = info.ys, ye = ys + info.ym;
 	zs = info.zs, ze = zs + info.zm;
 
-	int lxs = xs, lxe = xe;
-	int lys = ys, lye = ye;
-	int lzs = zs, lze = ze;
+	/* Compute local loop bounds (excluding ghost cells at domain boundaries) */
+	lxs = xs; lxe = xe;
+	lys = ys; lye = ye;
+	lzs = zs; lze = ze;
 
 	if (xs==0) lxs = xs+1;
 	if (ys==0) lys = ys+1;
@@ -1169,46 +1315,92 @@ void Compute_eddy_viscosity_LES(UserCtx *user)
 	if (ye==my) lye = ye-1;
 	if (ze==mz) lze = ze-1;
 
+	/* Initialize eddy viscosity to zero */
 	VecSet(user->lNu_t, 0);
-	
-	DMDAVecGetArray(fda, user->lUcat,  &ucat);
-	DMDAVecGetArray(fda, user->lCsi, &csi);
-	DMDAVecGetArray(fda, user->lEta, &eta);
-	DMDAVecGetArray(fda, user->lZet, &zet);
-	
-	DMDAVecGetArray(da, user->lNvert, &nvert);
-	DMDAVecGetArray(da, user->lAj, &aj);
-	DMDAVecGetArray(da, user->lNu_t, &lnu_t);
-	DMDAVecGetArray(da, user->lCs, &Cs);
-	DMDAVecGetArray(da, user->lUstar, &ustar);
-	
+
+	/* Get array access to PETSc vectors */
+	DMDAVecGetArray(fda, user->lUcat,  &ucat);   /* Cartesian velocity */
+	DMDAVecGetArray(fda, user->lCsi, &csi);      /* ξ metric */
+	DMDAVecGetArray(fda, user->lEta, &eta);      /* η metric */
+	DMDAVecGetArray(fda, user->lZet, &zet);      /* ζ metric */
+
+	DMDAVecGetArray(da, user->lNvert, &nvert);   /* Solid marker */
+	DMDAVecGetArray(da, user->lAj, &aj);         /* Jacobian */
+	DMDAVecGetArray(da, user->lNu_t, &lnu_t);    /* Output: eddy viscosity */
+	DMDAVecGetArray(da, user->lCs, &Cs);         /* Smagorinsky constant */
+	DMDAVecGetArray(da, user->lUstar, &ustar);   /* Friction velocity (for wall func) */
+
+	/*---------------------------------------------------------------------
+	 * MAIN LOOP: Compute eddy viscosity for each fluid cell
+	 *---------------------------------------------------------------------
+	 * Loop order: k (z), j (y), i (x) - matches PETSc natural ordering
+	 *--------------------------------------------------------------------*/
 	for (k=lzs; k<lze; k++)
 	for (j=lys; j<lye; j++)
 	for (i=lxs; i<lxe; i++) {
+		/* Skip solid cells (nvert > 1.1 indicates solid) */
 		if(nvert[k][j][i]>1.1) {
 			lnu_t[k][j][i]=0;
 			continue;
 		}
+
+		/* Get local Jacobian and metric tensor components */
 		double ajc = aj[k][j][i];
 		double csi0 = csi[k][j][i].x, csi1 = csi[k][j][i].y, csi2 = csi[k][j][i].z;
 		double eta0 = eta[k][j][i].x, eta1 = eta[k][j][i].y, eta2 = eta[k][j][i].z;
 		double zet0 = zet[k][j][i].x, zet1 = zet[k][j][i].y, zet2 = zet[k][j][i].z;
-		double dudc, dvdc, dwdc, dude, dvde, dwde, dudz, dvdz, dwdz;
-		double du_dx, du_dy, du_dz, dv_dx, dv_dy, dv_dz, dw_dx, dw_dy, dw_dz;
-		Compute_du_center (i, j, k, mx, my, mz, ucat, nvert, &dudc, &dvdc, &dwdc, &dude, &dvde, &dwde, &dudz, &dvdz, &dwdz);
-		Compute_du_dxyz ( csi0, csi1, csi2, eta0, eta1, eta2, zet0, zet1, zet2, ajc, dudc, dvdc, dwdc, dude, dvde, dwde, dudz, dvdz, dwdz,
-							&du_dx, &dv_dx, &dw_dx, &du_dy, &dv_dy, &dw_dy, &du_dz, &dv_dz, &dw_dz );
-		
-		double Sxx = 0.5*( du_dx + du_dx ), Sxy = 0.5*(du_dy + dv_dx), Sxz = 0.5*(du_dz + dw_dx);
-		double Syx = Sxy, Syy = 0.5*(dv_dy + dv_dy),	Syz = 0.5*(dv_dz + dw_dy);
-		double Szx = Sxz, Szy=Syz, Szz = 0.5*(dw_dz + dw_dz);
-	
-		double Sabs = sqrt( 2.0*( Sxx*Sxx + Sxy*Sxy + Sxz*Sxz + Syx*Syx + Syy*Syy + Syz*Syz + Szx*Szx + Szy*Szy + Szz*Szz ) );
-		
-		double filter  = pow( 1./aj[k][j][i],1./3.);
+
+		/* Velocity gradients in computational space */
+		double dudc, dvdc, dwdc;  /* ∂u/∂ξ, ∂v/∂ξ, ∂w/∂ξ */
+		double dude, dvde, dwde;  /* ∂u/∂η, ∂v/∂η, ∂w/∂η */
+		double dudz, dvdz, dwdz;  /* ∂u/∂ζ, ∂v/∂ζ, ∂w/∂ζ */
+
+		/* Physical space gradients */
+		double du_dx, du_dy, du_dz;
+		double dv_dx, dv_dy, dv_dz;
+		double dw_dx, dw_dy, dw_dz;
+
+		/* Step 1: Compute velocity gradients in computational space */
+		Compute_du_center (i, j, k, mx, my, mz, ucat, nvert,
+		                   &dudc, &dvdc, &dwdc,
+		                   &dude, &dvde, &dwde,
+		                   &dudz, &dvdz, &dwdz);
+
+		/* Step 2: Transform to physical space using metric tensors */
+		Compute_du_dxyz ( csi0, csi1, csi2, eta0, eta1, eta2, zet0, zet1, zet2, ajc,
+		                  dudc, dvdc, dwdc, dude, dvde, dwde, dudz, dvdz, dwdz,
+		                  &du_dx, &dv_dx, &dw_dx,
+		                  &du_dy, &dv_dy, &dw_dy,
+		                  &du_dz, &dv_dz, &dw_dz );
+
+		/* Step 3: Compute symmetric strain rate tensor S_ij = 0.5(∂u_i/∂x_j + ∂u_j/∂x_i) */
+		double Sxx = 0.5*( du_dx + du_dx );  /* = du/dx */
+		double Sxy = 0.5*(du_dy + dv_dx);
+		double Sxz = 0.5*(du_dz + dw_dx);
+		double Syx = Sxy;
+		double Syy = 0.5*(dv_dy + dv_dy);    /* = dv/dy */
+		double Syz = 0.5*(dv_dz + dw_dy);
+		double Szx = Sxz;
+		double Szy = Syz;
+		double Szz = 0.5*(dw_dz + dw_dz);    /* = dw/dz */
+
+		/* Step 4: Strain rate magnitude |S| = sqrt(2 × S_ij × S_ij) */
+		double Sabs = sqrt( 2.0*( Sxx*Sxx + Sxy*Sxy + Sxz*Sxz +
+		                          Syx*Syx + Syy*Syy + Syz*Syz +
+		                          Szx*Szx + Szy*Szy + Szz*Szz ) );
+
+		/* Step 5: Filter width Δ = (cell volume)^(1/3) = (1/aj)^(1/3) */
+		double filter = pow( 1./aj[k][j][i], 1./3.);
+
+		/* Step 6: Smagorinsky model: ν_t = Cs × Δ² × |S| */
 		lnu_t[k][j][i] = Cs[k][j][i] * pow ( filter, 2.0 ) * Sabs;
 
-		if(les && wallfunction==2 && nvert[k][j][i]+nvert[k][j][i+1]+nvert[k][j][i-1]+nvert[k][j+1][i]+nvert[k][j-1][i]+nvert[k+1][j][i]+nvert[k-1][j][i]>0.1) lnu_t[k][j][i]=0;
+		/* Zero eddy viscosity near walls when wall function is active */
+		if(les && wallfunction==2 &&
+		   nvert[k][j][i]+nvert[k][j][i+1]+nvert[k][j][i-1]+
+		   nvert[k][j+1][i]+nvert[k][j-1][i]+nvert[k+1][j][i]+nvert[k-1][j][i]>0.1) {
+			lnu_t[k][j][i]=0;
+		}
 		
 		/*
 		if( (user->bctype[0]==-1 && i==1) || (user->bctype[1]==-1 && i==mx-2) ){
@@ -1226,13 +1418,33 @@ void Compute_eddy_viscosity_LES(UserCtx *user)
 		}
 		*/
 	}
-	
+
+	/*=====================================================================
+	 * WALL FUNCTION TREATMENT
+	 *=====================================================================
+	 * This section applies wall function corrections near immersed boundaries.
+	 * The GPU path jumps here after bulk computation to apply the same
+	 * wall treatment as the CPU path.
+	 *====================================================================*/
+wall_function_treatment:
+	/* GPU path skips the CPU setup, so get local info here if needed */
+	if (gpu_path_taken) {
+		DMDAGetLocalInfo(da, &info);
+		mx = info.mx; my = info.my; mz = info.mz;
+		xs = info.xs; xe = xs + info.xm;
+		ys = info.ys; ye = ys + info.ym;
+		zs = info.zs; ze = zs + info.zm;
+	}
+
 	if(immersed && wallfunction==2) {
-		DMDAVecRestoreArray(da, user->lNu_t, &lnu_t);
-		
+		/* Only restore if CPU path was taken (lnu_t was obtained) */
+		if (!gpu_path_taken) {
+			DMDAVecRestoreArray(da, user->lNu_t, &lnu_t);
+		}
+
 		DMLocalToLocalBegin(da, user->lNu_t, INSERT_VALUES, user->lNu_t);
 		DMLocalToLocalEnd(da, user->lNu_t, INSERT_VALUES, user->lNu_t);
-		
+
 		DMDAVecGetArray(da, user->lNu_t, &lnu_t);
 		
 		for(int ibi=0; ibi<NumberOfBodies; ibi++)
@@ -1305,21 +1517,24 @@ void Compute_eddy_viscosity_LES(UserCtx *user)
 			};
 		}
 	}
-	
-	DMDAVecRestoreArray(fda, user->lUcat,  &ucat);
-	DMDAVecRestoreArray(fda, user->lCsi, &csi);
-	DMDAVecRestoreArray(fda, user->lEta, &eta);
-	DMDAVecRestoreArray(fda, user->lZet, &zet);
-	
-	DMDAVecRestoreArray(da, user->lNvert, &nvert);
-	DMDAVecRestoreArray(da, user->lAj, &aj);
-	DMDAVecRestoreArray(da, user->lNu_t, &lnu_t);
-	DMDAVecRestoreArray(da, user->lCs, &Cs);
-	DMDAVecRestoreArray(da, user->lUstar, &ustar);
-	
+
+	/* Only restore arrays if CPU path was taken (GPU path doesn't get these arrays) */
+	if (!gpu_path_taken) {
+		DMDAVecRestoreArray(fda, user->lUcat,  &ucat);
+		DMDAVecRestoreArray(fda, user->lCsi, &csi);
+		DMDAVecRestoreArray(fda, user->lEta, &eta);
+		DMDAVecRestoreArray(fda, user->lZet, &zet);
+
+		DMDAVecRestoreArray(da, user->lNvert, &nvert);
+		DMDAVecRestoreArray(da, user->lAj, &aj);
+		DMDAVecRestoreArray(da, user->lNu_t, &lnu_t);
+		DMDAVecRestoreArray(da, user->lCs, &Cs);
+		DMDAVecRestoreArray(da, user->lUstar, &ustar);
+	}
+
 	DMLocalToLocalBegin(da, user->lNu_t, INSERT_VALUES, user->lNu_t);
 	DMLocalToLocalEnd(da, user->lNu_t, INSERT_VALUES, user->lNu_t);
-	
+
 	DMDAVecGetArray(da, user->lNu_t, &lnu_t);
 	for(k=zs; k<ze; k++)
 	for(j=ys; j<ye; j++)

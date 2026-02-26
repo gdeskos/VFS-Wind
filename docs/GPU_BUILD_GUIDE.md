@@ -253,28 +253,34 @@ PETSC ERROR: Caught signal number 11 SEGV
 
 ```
 Source/
-├── gpu/
-│   ├── gpu_config.hpp           # GPU configuration and type aliases
-│   ├── gpu_solver.hpp           # GPU solver configuration (C++)
-│   ├── gpu_solver.h             # GPU solver configuration (C interface)
-│   ├── gpu_solver.cpp           # GPU solver implementation
-│   ├── kokkos_init.cpp          # Kokkos initialization/finalization
-│   ├── kokkos_init.h            # C interface header
-│   └── kernels/
-│       ├── kernels.hpp          # Unified kernel header
-│       ├── petsc_kokkos.hpp     # PETSc-Kokkos integration utilities
-│       ├── convection_kernel.hpp # QUICK scheme convection
-│       ├── viscous_kernel.hpp    # Viscous diffusion
-│       ├── pressure_gradient_kernel.hpp # Pressure gradient
-│       ├── ibm_types.hpp         # IBM GPU data structures
-│       ├── ibm_interpolation_kernel.hpp # IBM velocity interpolation
-│       ├── ibm_force_kernel.hpp  # IBM force spreading
-│       ├── ibm_kernels.hpp       # IBM unified header
-│       ├── levelset_kernel.hpp   # Level-set advection (WENO schemes)
-│       ├── les_kernel.hpp        # LES turbulence models
-│       ├── rans_kernel.hpp       # RANS k-omega models
-│       └── turbulence_kernels.hpp # Phase 4 unified header
-└── main.c                       # Modified to call GPU init/finalize
+├── les.c                        # LES solver (GPU-integrated)
+├── rhs.c                        # Convection/Viscous (GPU-integrated)
+├── k-omega.c                    # RANS k-omega (GPU-integrated)
+├── level.c                      # Level-set (GPU-integrated)
+├── main.c                       # Modified to call GPU init/finalize
+└── gpu/
+    ├── gpu_config.hpp           # GPU configuration and type aliases
+    ├── gpu_dispatch.h           # C interface for GPU kernels
+    ├── gpu_dispatch.cpp         # C++ dispatch implementation
+    ├── gpu_solver.hpp           # GPU solver configuration (C++)
+    ├── gpu_solver.h             # GPU solver configuration (C interface)
+    ├── gpu_solver.cpp           # GPU solver implementation
+    ├── kokkos_init.cpp          # Kokkos initialization/finalization
+    ├── kokkos_init.h            # C interface header
+    └── kernels/
+        ├── kernels.hpp          # Unified kernel header
+        ├── petsc_kokkos.hpp     # PETSc-Kokkos integration utilities
+        ├── convection_kernel.hpp # QUICK scheme convection
+        ├── viscous_kernel.hpp    # Viscous diffusion
+        ├── pressure_gradient_kernel.hpp # Pressure gradient
+        ├── ibm_types.hpp         # IBM GPU data structures
+        ├── ibm_interpolation_kernel.hpp # IBM velocity interpolation
+        ├── ibm_force_kernel.hpp  # IBM force spreading
+        ├── ibm_kernels.hpp       # IBM unified header
+        ├── levelset_kernel.hpp   # Level-set advection (WENO schemes)
+        ├── les_kernel.hpp        # LES turbulence models
+        ├── rans_kernel.hpp       # RANS k-omega models
+        └── turbulence_kernels.hpp # Phase 4 unified header
 
 tests/
 └── gpu/
@@ -326,9 +332,23 @@ tests/
 - RANS: k-omega SST (Menter) with F1/F2 blending
 - Phase 4 kernel unit tests (17 tests passing)
 
+**Phase 5 (Solver Integration)**: Complete ✓
+- GPU dispatch layer (gpu_dispatch.h/cpp)
+- Integration into les.c (LES eddy viscosity)
+- Integration into rhs.c (Convection, Viscous)
+- Integration into k-omega.c (RANS k-omega RHS)
+- Integration into level.c (Level-set advection)
+- Automatic CPU fallback on GPU failure
+- Extensive code documentation
+
 **Total GPU Tests**: 50 passing
 
-See `docs/GPU_PORTING_PLAN.md` for full roadmap.
+## Documentation
+
+- **`docs/GPU_ARCHITECTURE.md`** - Detailed explanation of the GPU architecture,
+  design decisions, and reasoning behind each choice. **Recommended reading** for
+  developers who want to understand or extend the GPU code.
+- **`docs/GPU_PORTING_PLAN.md`** - Original porting roadmap and milestones.
 
 ## Using the GPU Kernels
 

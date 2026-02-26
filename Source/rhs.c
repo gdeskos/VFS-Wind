@@ -6,7 +6,49 @@
 *                                                                *
 ******************************************************************/
 
+/*=========================================================================
+ * RIGHT-HAND SIDE (RHS) COMPUTATION MODULE
+ *=========================================================================
+ *
+ * This file computes the right-hand side terms of the momentum equations:
+ *   ∂u/∂t = -∇·(uu) + ∇·(ν∇u) - ∇p + f
+ *           ├──────┤  ├──────┤
+ *           Convection Viscous
+ *
+ * MAIN FUNCTIONS:
+ * ---------------
+ * 1. Convection(): Computes convective term ∂(ρu_i u_j)/∂x_j using QUICK scheme
+ * 2. Viscous():    Computes viscous term ∂/∂x_j[(ν+ν_t)(∂u_i/∂x_j + ∂u_j/∂x_i)]
+ * 3. Contra2Cart(): Converts contravariant to Cartesian velocity
+ *
+ * NUMERICAL SCHEMES:
+ * ------------------
+ * - Convection: QUICK (Quadratic Upstream Interpolation for Convective Kinematics)
+ *   Third-order upwind-biased scheme that reduces numerical diffusion
+ *
+ * - Viscous: Central differencing with face interpolation
+ *   Uses metric transformation for curvilinear grids
+ *
+ * GPU ACCELERATION:
+ * -----------------
+ * When compiled with ENABLE_GPU, these functions can dispatch to GPU kernels
+ * for parallel execution. The GPU path handles data transfer automatically.
+ *
+ * To enable GPU: cmake -DENABLE_GPU=ON -DKOKKOS_BACKEND=CUDA ..
+ *
+ *========================================================================*/
+
 #include "variables.h"
+
+/*-------------------------------------------------------------------------
+ * GPU DISPATCH HEADER
+ *-------------------------------------------------------------------------
+ * Include GPU dispatch functions when GPU support is enabled.
+ * These provide C-callable wrappers for the Kokkos GPU kernels.
+ *------------------------------------------------------------------------*/
+#ifdef ENABLE_GPU
+#include "gpu/gpu_dispatch.h"
+#endif
 
 extern PetscInt ti;
 extern PetscInt block_number, NumberOfBodies;
@@ -748,12 +790,88 @@ void Contra2Cart_2(UserCtx *user)
 	}
 };
 
+/*=========================================================================
+ * CONVECTION TERM COMPUTATION
+ *=========================================================================
+ *
+ * Computes the convective term: ∂(ρu_i u_j)/∂x_j
+ *
+ * NUMERICAL SCHEME: QUICK (Quadratic Upstream Interpolation)
+ * -----------------------------------------------------------
+ * For a face between cells P and E with upwind cell U:
+ *
+ *   φ_face = φ_P + g[(1-g)φ_U + (2g)φ_P + (1-g)φ_E]
+ *
+ * where g = 1/8 for the standard QUICK scheme.
+ *
+ * FLUX COMPUTATION:
+ * -----------------
+ * 1. Compute flux contributions from i-faces (Fp1)
+ * 2. Compute flux contributions from j-faces (Fp2)
+ * 3. Compute flux contributions from k-faces (Fp3)
+ * 4. Combine: Conv = (Fp1[i] - Fp1[i-1]) + (Fp2[j] - Fp2[j-1]) + ...
+ *
+ * SOLID BOUNDARY TREATMENT:
+ * -------------------------
+ * Near solid boundaries (nvert > 0.1), the scheme falls back to
+ * first-order upwind to maintain stability.
+ *
+ * GPU ACCELERATION:
+ * -----------------
+ * When ENABLE_GPU is defined and GPU is available, the computation
+ * is dispatched to a Kokkos GPU kernel for parallel execution.
+ *
+ *========================================================================*/
 PetscErrorCode Convection(UserCtx *user, Vec Ucont, Vec Ucat, Vec Conv)
 {
-  //  Vec		Ucont = user->lUcont, Ucat = user->lUcat;
-  
-  Cmpnts	***ucont, ***ucat;
   DM		da = user->da, fda = user->fda;
+
+  /*=====================================================================
+   * GPU PATH: Dispatch to GPU kernel if available
+   *=====================================================================
+   * The GPU kernel performs the same QUICK scheme computation but
+   * in parallel on GPU. All flux computations and combinations are
+   * done on the device.
+   *====================================================================*/
+#ifdef ENABLE_GPU
+  if (VFSWind_GPU_IsAvailable()) {
+    /*
+     * GPU dispatch: VFSWind_GPU_ComputeConvection
+     *
+     * This function:
+     * 1. Copies PETSc vectors to Kokkos views on GPU
+     * 2. Executes parallel kernel computing QUICK fluxes
+     * 3. Combines flux contributions
+     * 4. Copies result back to Conv vector
+     *
+     * Returns 0 on success, non-zero on error (falls back to CPU)
+     */
+    int gpu_err = VFSWind_GPU_ComputeConvection(
+        da, fda,
+        Ucont, Ucat,
+        user->lNvert,
+        Conv
+    );
+
+    if (gpu_err == 0) {
+      /* GPU computation successful - skip CPU path */
+      return 0;
+    }
+    /* GPU failed - fall through to CPU path */
+    PetscPrintf(PETSC_COMM_WORLD, "GPU Convection kernel failed, using CPU fallback\n");
+  }
+#endif
+
+  /*=====================================================================
+   * CPU PATH: Original implementation
+   *=====================================================================
+   * Standard nested loop implementation using QUICK scheme.
+   * Used when GPU is not available or GPU dispatch fails.
+   *====================================================================*/
+
+  //  Vec		Ucont = user->lUcont, Ucat = user->lUcat;
+
+  Cmpnts	***ucont, ***ucat;
   DMDALocalInfo	info;
   PetscInt	xs, xe, ys, ye, zs, ze; // Local grid information
   PetscInt	mx, my, mz; // Dimensions in three directions
@@ -763,7 +881,7 @@ PetscErrorCode Convection(UserCtx *user, Vec Ucont, Vec Ucat, Vec Conv)
   Cmpnts	***conv;
   //  Cmpnts	***zet;
   PetscReal	ucon, up, um;
-  PetscReal	coef = 0.125;
+  PetscReal	coef = 0.125;  /* QUICK scheme coefficient */
 
   PetscInt	lxs, lxe, lys, lye, lzs, lze;
 
@@ -1068,8 +1186,88 @@ PetscErrorCode Convection(UserCtx *user, Vec Ucont, Vec Ucat, Vec Conv)
   return (0);
 }
 
+/*=========================================================================
+ * VISCOUS TERM COMPUTATION
+ *=========================================================================
+ *
+ * Computes the viscous diffusion term:
+ *   ∂/∂x_j [(ν + ν_t)(∂u_i/∂x_j + ∂u_j/∂x_i)]
+ *
+ * METRIC TRANSFORMATION:
+ * ----------------------
+ * The computation uses curvilinear coordinates (ξ, η, ζ). Gradients
+ * in physical space are computed via:
+ *
+ *   ∂u/∂x = ∂u/∂ξ × ∂ξ/∂x + ∂u/∂η × ∂η/∂x + ∂u/∂ζ × ∂ζ/∂x
+ *
+ * The metric tensors (csi, eta, zet) store ∂ξ/∂x, etc.
+ *
+ * TURBULENT VISCOSITY:
+ * --------------------
+ * When LES (les flag) or RANS (rans flag) is enabled, the turbulent
+ * viscosity ν_t from user->lNu_t is added to molecular viscosity.
+ *
+ * FACE-BASED COMPUTATION:
+ * -----------------------
+ * Viscous fluxes are computed at cell faces (I, J, K faces) and then
+ * combined to form the cell-centered viscous term:
+ *   Visc = (Fp1[i] - Fp1[i-1]) + (Fp2[j] - Fp2[j-1]) + (Fp3[k] - Fp3[k-1])
+ *
+ * GPU ACCELERATION:
+ * -----------------
+ * When ENABLE_GPU is defined, computation can be dispatched to GPU.
+ *
+ *========================================================================*/
 PetscErrorCode Viscous(UserCtx *user, Vec Ucont, Vec Ucat, Vec Visc)
 {
+	DM		da = user->da, fda = user->fda;
+
+	/*=====================================================================
+	 * GPU PATH: Dispatch to GPU kernel if available
+	 *=====================================================================
+	 * The GPU kernel computes viscous terms in parallel, including
+	 * the metric transformations and turbulent viscosity contribution.
+	 *====================================================================*/
+#ifdef ENABLE_GPU
+	if (VFSWind_GPU_IsAvailable()) {
+		/*
+		 * GPU dispatch: VFSWind_GPU_ComputeViscous
+		 *
+		 * This function handles:
+		 * - Velocity gradient computation in curvilinear coords
+		 * - Metric transformation to physical space
+		 * - Turbulent viscosity contribution (if LES/RANS enabled)
+		 * - Face flux computation and combination
+		 *
+		 * Returns 0 on success, non-zero on error
+		 */
+		int gpu_err = VFSWind_GPU_ComputeViscous(
+			da, fda,
+			Ucat,
+			user->lNvert,
+			user->lICsi, user->lIEta, user->lIZet,
+			user->lJCsi, user->lJEta, user->lJZet,
+			user->lKCsi, user->lKEta, user->lKZet,
+			user->lIAj, user->lJAj, user->lKAj,
+			user->lNu_t,  /* NULL if no turbulence model */
+			user->ren,
+			Visc
+		);
+
+		if (gpu_err == 0) {
+			/* GPU computation successful */
+			return 0;
+		}
+		/* GPU failed - fall through to CPU path */
+		PetscPrintf(PETSC_COMM_WORLD, "GPU Viscous kernel failed, using CPU fallback\n");
+	}
+#endif
+
+	/*=====================================================================
+	 * CPU PATH: Original implementation
+	 *=====================================================================
+	 * Uses face-based flux computation with metric transformation.
+	 *====================================================================*/
 	Vec		Csi = user->lCsi, Eta = user->lEta, Zet = user->lZet;
 
 	Cmpnts	***ucont, ***ucat;//, ***ucat_old;
@@ -1081,7 +1279,6 @@ PetscErrorCode Viscous(UserCtx *user, Vec Ucont, Vec Ucat, Vec Visc)
 
 	PetscReal	***nvert;
 
-	DM		da = user->da, fda = user->fda;
 	DMDALocalInfo	info;
 	PetscInt	xs, xe, ys, ye, zs, ze; // Local grid information
 	PetscInt	mx, my, mz; // Dimensions in three directions

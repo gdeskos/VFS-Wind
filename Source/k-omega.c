@@ -6,10 +6,68 @@
 *                                                                *
 ******************************************************************/
 
+/*=========================================================================
+ * RANS k-omega TURBULENCE MODELS
+ *=========================================================================
+ *
+ * This file implements Reynolds-Averaged Navier-Stokes (RANS) turbulence
+ * models based on the k-omega formulation.
+ *
+ * SUPPORTED MODELS:
+ * -----------------
+ * 1. Wilcox Low-Re (rans=1):
+ *    - Low Reynolds number corrections
+ *    - α* and β* damping functions
+ *    - Good for transitional flows
+ *
+ * 2. Wilcox High-Re (rans=2):
+ *    - Standard high Reynolds number model
+ *    - α = 5/9, α* = 1, β* = 0.09
+ *
+ * 3. SST Menter (rans=3):
+ *    - Shear Stress Transport model
+ *    - Blends k-omega (near wall) and k-epsilon (free stream)
+ *    - Uses F1/F2 blending functions
+ *    - Best overall accuracy for most flows
+ *
+ * GOVERNING EQUATIONS:
+ * --------------------
+ * k-equation:   ∂k/∂t + u·∇k = P_k - β*ωk + ∇·[(ν + σ_k ν_t)∇k]
+ * ω-equation:   ∂ω/∂t + u·∇ω = αS² - βω² + ∇·[(ν + σ_ω ν_t)∇ω] + CD
+ *
+ * Where:
+ *   P_k = ν_t × |S|²           (Production)
+ *   CD  = 2σ_ω₂/ω × ∇k·∇ω     (Cross-diffusion, SST only)
+ *
+ * MAIN FUNCTIONS:
+ * ---------------
+ * - RHS_K_Omega(): Compute RHS terms for k-omega equations
+ * - Solve_K_Omega(): Solve k-omega system using SNES
+ * - K_Omega_BC(): Apply wall boundary conditions
+ * - K_Omega_IC(): Initialize k and omega fields
+ *
+ * GPU ACCELERATION:
+ * -----------------
+ * When compiled with ENABLE_GPU, computationally intensive loops
+ * can be offloaded to GPU using Kokkos.
+ *
+ * To enable GPU: cmake -DENABLE_GPU=ON -DKOKKOS_BACKEND=CUDA ..
+ *
+ *========================================================================*/
+
 #include "variables.h"
 #include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
+
+/*-------------------------------------------------------------------------
+ * GPU DISPATCH HEADER
+ *-------------------------------------------------------------------------
+ * Include GPU dispatch functions when GPU support is enabled.
+ *------------------------------------------------------------------------*/
+#ifdef ENABLE_GPU
+#include "gpu/gpu_dispatch.h"
+#endif
 
 extern PetscInt immersed, NumberOfBodies, ti, tistart, wallfunction;
 extern double find_utau_Cabot(double nu,  double u, double y, double guess, double dpdn);
@@ -637,28 +695,93 @@ void Compute_dscalar_dxyz ( double csi0, double csi1, double csi2, double eta0, 
 	*dk_dz = (dkdc * csi2 + dkde * eta2 + dkdz * zet2) * ajc;
 };
 
+/*=========================================================================
+ * RHS_K_Omega: Compute Right-Hand Side for k-omega Equations
+ *=========================================================================
+ *
+ * Computes the RHS of the discretized k-omega transport equations:
+ *
+ * For k-equation:
+ *   RHS_k = P_k - β*ωk + ∇·[(ν + σ_k ν_t)∇k] - Convection_k
+ *
+ * For ω-equation:
+ *   RHS_ω = α(P_k/ν_t) - βω² + ∇·[(ν + σ_ω ν_t)∇ω] + CD - Convection_ω
+ *
+ * COMPUTATION STEPS:
+ * ------------------
+ * 1. Compute convective fluxes (upwind) for k and ω in i,j,k directions
+ * 2. Compute viscous/diffusive fluxes using face-based gradients
+ * 3. Compute production term P_k = ν_t × |S|²
+ * 4. Compute dissipation terms (β*ωk and βω²)
+ * 5. For SST: Compute cross-diffusion term CD
+ * 6. Combine all terms into KOmega_RHS
+ *
+ * GPU ACCELERATION:
+ * -----------------
+ * When ENABLE_GPU is defined, the computation can be dispatched to GPU.
+ *
+ *========================================================================*/
 void RHS_K_Omega(UserCtx *user, Vec KOmega_RHS)
 {
 	DM		da = user->da, fda = user->fda, fda2 = user->fda2;
+
+	/*=====================================================================
+	 * GPU PATH: Dispatch to GPU kernel if available
+	 *=====================================================================
+	 * The GPU kernel computes all k-omega RHS terms in parallel,
+	 * including convection, diffusion, production, and dissipation.
+	 *====================================================================*/
+#ifdef ENABLE_GPU
+	if (VFSWind_GPU_IsAvailable()) {
+		/*
+		 * GPU dispatch: VFSWind_GPU_ComputeKOmegaRHS
+		 *
+		 * Computes production, dissipation, convection, diffusion,
+		 * and (for SST) cross-diffusion terms on GPU.
+		 */
+		int gpu_err = VFSWind_GPU_ComputeKOmegaRHS(
+			da, fda, fda2,
+			user->lUcat, user->lUcont,
+			user->lK_Omega,
+			user->lNu_t,
+			user->lCsi, user->lEta, user->lZet,
+			user->lAj,
+			user->lNvert,
+			user->Distance,  /* Note: Distance uses global Vec, not local */
+			KOmega_RHS,
+			user->ren,
+			(VFSWind_RANSModel)rans
+		);
+
+		if (gpu_err == 0) {
+			return;  /* GPU computation successful */
+		}
+		PetscPrintf(PETSC_COMM_WORLD, "GPU k-omega RHS failed, using CPU\n");
+	}
+#endif
+
+	/*=====================================================================
+	 * CPU PATH: Original implementation
+	 *=====================================================================*/
 	DMDALocalInfo	info;
 	PetscInt	xs, xe, ys, ye, zs, ze; // Local grid information
 	PetscInt	mx, my, mz; // Dimensions in three directions
 	PetscInt	i, j, k;
-	
+
 	PetscReal	***aj;
-	
+
 	PetscInt	lxs, lxe, lys, lye, lzs, lze;
-	
+
 	Cmpnts2	***K_Omega, ***K_Omega_o, ***komega_rhs;
 	Cmpnts	***ucont, ***ucat;
 	Cmpnts	***csi, ***eta, ***zet;
 	PetscReal	***nvert, ***distance, ***lf1, ***lnu_t;
- 
+
 	Vec Fp1, Fp2, Fp3;
 	Vec Visc1, Visc2, Visc3;
 	Cmpnts2 ***fp1, ***fp2, ***fp3;
 	Cmpnts2 ***visc1, ***visc2, ***visc3;
-	
+
 	Cmpnts	***icsi, ***ieta, ***izet;
 	Cmpnts	***jcsi, ***jeta, ***jzet;
 	Cmpnts	***kcsi, ***keta, ***kzet;
