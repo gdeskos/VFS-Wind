@@ -6424,12 +6424,12 @@ PetscErrorCode Calc_forces_SI(FSInfo *fsi,UserCtx *user,
   DMDAVecRestoreArray(da, user->lJAj, &jaj);
   DMDAVecRestoreArray(da, user->lKAj, &kaj);
 
-  VecDestroy(&Coor);
+  // VecDestroy(&Coor);  // DO NOT destroy - Coor is owned by the DM
 
   return(0);
 }
 
-//add (toni) for FSI and floating structures 
+//add (toni) for FSI and floating structures
 PetscErrorCode Calc_forces_SI_levelset(FSInfo *fsi,UserCtx *user,
 			      IBMNodes *ibm,PetscInt ti, 
 			      PetscInt ibi, PetscInt bi)
@@ -7468,8 +7468,8 @@ PetscErrorCode Calc_forces_SI_levelset(FSInfo *fsi,UserCtx *user,
   DMDAVecRestoreArray(da, user->lIAj, &iaj);
   DMDAVecRestoreArray(da, user->lJAj, &jaj);
   DMDAVecRestoreArray(da, user->lKAj, &kaj);
-  DMDAVecRestoreArray(da, user->lAj, &aj);	
-  VecDestroy(&Coor);
+  DMDAVecRestoreArray(da, user->lAj, &aj);
+  // VecDestroy(&Coor);  // DO NOT destroy - Coor is owned by the DM
   return(0);
 }
 

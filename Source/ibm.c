@@ -3666,11 +3666,35 @@ PetscErrorCode ibm_interpolation_advanced(UserCtx *user)
 		
 		DMDAVecRestoreArray(fda, user->lUcat, &lucat);
 		DMDAVecRestoreArray(fda, user->Ucont, &ucont);
-		
+
 		DMGlobalToLocalBegin(fda, user->Ucont, INSERT_VALUES, user->lUcont);
 		DMGlobalToLocalEnd(fda, user->Ucont, INSERT_VALUES, user->lUcont);
-		
+
+		// Restore arrays before calling Contra2Cart to avoid double DMDAVecGetArray
+		DMDAVecRestoreArray(fda, user->lCsi, &csi);
+		DMDAVecRestoreArray(fda, user->lEta, &eta);
+		DMDAVecRestoreArray(fda, user->lZet, &zet);
+		DMDAVecRestoreArray(fda, user->lICsi, &icsi);
+		DMDAVecRestoreArray(fda, user->lJEta, &jeta);
+		DMDAVecRestoreArray(fda, user->lKZet, &kzet);
+		DMDAVecRestoreArray(da, user->lAj, &aj);
+		DMDAVecRestoreArray(da, user->lNvert, &nvert);
+		DMDAVecRestoreArray(da, user->lUstar, &ustar);
+		DMDAVecRestoreArray(fda, user->Ucat, &ucat);
+
 		Contra2Cart(user);
+
+		// Re-get arrays after Contra2Cart returns
+		DMDAVecGetArray(fda, user->lCsi, &csi);
+		DMDAVecGetArray(fda, user->lEta, &eta);
+		DMDAVecGetArray(fda, user->lZet, &zet);
+		DMDAVecGetArray(fda, user->lICsi, &icsi);
+		DMDAVecGetArray(fda, user->lJEta, &jeta);
+		DMDAVecGetArray(fda, user->lKZet, &kzet);
+		DMDAVecGetArray(da, user->lAj, &aj);
+		DMDAVecGetArray(da, user->lNvert, &nvert);
+		DMDAVecGetArray(da, user->lUstar, &ustar);
+		DMDAVecGetArray(fda, user->Ucat, &ucat);
 	}//tmp_end
 
 	DMGlobalToLocalBegin(da, user->P, INSERT_VALUES, user->lP);
@@ -3914,6 +3938,8 @@ PetscErrorCode ibm_interpolation_advanced_fsi(UserCtx *user)
 		DMDAVecRestoreArray(fda, user->lEta, &jeta);
 		DMDAVecRestoreArray(fda, user->lZet, &kzet);
 		DMDAVecRestoreArray(da, user->lNvert, &nvert);
+		// Restore Ucat before Contra2Cart to avoid double DMDAVecGetArray
+		DMDAVecRestoreArray(fda, user->Ucat, &ucat);
 
 		DMGlobalToLocalBegin(fda, user->Ucont, INSERT_VALUES, user->lUcont);
 		DMGlobalToLocalEnd(fda, user->Ucont, INSERT_VALUES, user->lUcont);

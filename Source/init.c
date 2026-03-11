@@ -255,8 +255,8 @@ PetscErrorCode MG_Initial(UserMG *usermg, IBMNodes *ibm)
 	
 	char str[256];
 	
-	if(xyz_input) sprintf(str, "%s/%s", path, "xyz.dat");
-	else sprintf(str, "%s/%s", path, gridfile);
+	/* Use gridfile for all input formats - xyz_input only affects the parsing format */
+	sprintf(str, "%s/%s", path, gridfile);
 	
 	fd = fopen(str, "r");
 	if(fd==NULL) printf("Cannot open %s !\n", str),exit(0);
@@ -293,19 +293,22 @@ PetscErrorCode MG_Initial(UserMG *usermg, IBMNodes *ibm)
 	
 
 	for (bi=0; bi<block_number; bi++) {
-		
-		std::vector<double> X, Y,Z;
+
+		/* For xyz_input (rectilinear format), we store 1D coordinate arrays */
+		double *X_coords = NULL, *Y_coords = NULL, *Z_coords = NULL;
 		double tmp;
-		
+
 		if(xyz_input) {
 			fscanf(fd, "%i %i %i\n", &(user[bi].IM), &(user[bi].JM), &(user[bi].KM));
-			X.resize(user[bi].IM);
-			Y.resize(user[bi].JM);
-			Z.resize(user[bi].KM);
-			
-			for (i=0; i<user[bi].IM; i++) fscanf(fd, "%le %le %le\n", &X[i], &tmp, &tmp);
-			for (j=0; j<user[bi].JM; j++) fscanf(fd, "%le %le %le\n", &tmp, &Y[j], &tmp);
-			for (k=0; k<user[bi].KM; k++) fscanf(fd, "%le %le %le\n", &tmp, &tmp, &Z[k]);
+			/* Allocate 1D arrays for rectilinear grid coordinates */
+			X_coords = (double*)malloc(user[bi].IM * sizeof(double));
+			Y_coords = (double*)malloc(user[bi].JM * sizeof(double));
+			Z_coords = (double*)malloc(user[bi].KM * sizeof(double));
+			/* Read 1D coordinate arrays: X[i], Y[j], Z[k] format */
+			/* Each line has (x, y, z) but we only use the relevant component */
+			for (int ii=0; ii<user[bi].IM; ii++) fscanf(fd, "%le %le %le\n", &X_coords[ii], &tmp, &tmp);
+			for (int jj=0; jj<user[bi].JM; jj++) fscanf(fd, "%le %le %le\n", &tmp, &Y_coords[jj], &tmp);
+			for (int kk=0; kk<user[bi].KM; kk++) fscanf(fd, "%le %le %le\n", &tmp, &tmp, &Z_coords[kk]);
 		}
 		else if(binary_input) {
 			fread(&(user[bi].IM), sizeof(int), 1, fd);
@@ -332,46 +335,54 @@ PetscErrorCode MG_Initial(UserMG *usermg, IBMNodes *ibm)
 
 		DMGetCoordinatesLocal(user[bi].da, &Coor);
 		DMDAVecGetArray(user[bi].fda, Coor, &coor);
-		
+
 		double buffer;
-		
-		for (k=0; k<KM; k++)
-		for (j=0; j<JM; j++)
-		for (i=0; i<IM; i++) {
-				
-			if(xyz_input) {}
-			else if(binary_input) fread(&buffer, sizeof(double), 1, fd);
-			else fscanf(fd, "%le", &buffer);
-				
-			if( k>=zs && k<=ze && j>=ys && j<ye && i>=xs && i<xe ) {
-				if(xyz_input) coor[k][j][i].x = X[i]/cl*L_dim;
-				else coor[k][j][i].x = buffer/cl*L_dim;
+
+		if(xyz_input) {
+			/* For xyz_input: construct rectilinear grid from 1D coordinate arrays */
+			for (k=0; k<KM; k++)
+			for (j=0; j<JM; j++)
+			for (i=0; i<IM; i++) {
+				if( k>=zs && k<ze && j>=ys && j<ye && i>=xs && i<xe ) {
+					coor[k][j][i].x = X_coords[i] / cl * L_dim;
+					coor[k][j][i].y = Y_coords[j] / cl * L_dim;
+					coor[k][j][i].z = Z_coords[k] / cl * L_dim;
+				}
 			}
+			free(X_coords); X_coords = NULL;
+			free(Y_coords); Y_coords = NULL;
+			free(Z_coords); Z_coords = NULL;
 		}
-			
-		for (k=0; k<KM; k++)
-		for (j=0; j<JM; j++)
-		for (i=0; i<IM; i++) {
-			if(xyz_input) {}
-			else if(binary_input) fread(&buffer, sizeof(double), 1, fd);
-			else fscanf(fd, "%le", &buffer);
-				
-			if( k>=zs && k<=ze && j>=ys && j<ye && i>=xs && i<xe ) {
-				if(xyz_input) coor[k][j][i].y = Y[j]/cl*L_dim;
-				else coor[k][j][i].y = buffer/cl*L_dim;
+		else {
+			/* For binary_input or ASCII grid.dat: read x, y, z in separate passes */
+			for (k=0; k<KM; k++)
+			for (j=0; j<JM; j++)
+			for (i=0; i<IM; i++) {
+				if(binary_input) fread(&buffer, sizeof(double), 1, fd);
+				else fscanf(fd, "%le", &buffer);
+				if( k>=zs && k<ze && j>=ys && j<ye && i>=xs && i<xe ) {
+					coor[k][j][i].x = buffer/cl*L_dim;
+				}
 			}
-		}
-	
-		for (k=0; k<KM; k++)
-		for (j=0; j<JM; j++)
-		for (i=0; i<IM; i++) {
-			if(xyz_input) {}
-			else if(binary_input) fread(&buffer, sizeof(double), 1, fd);
-			else fscanf(fd, "%le", &buffer);
-				
-			if( k>=zs && k<=ze && j>=ys && j<ye && i>=xs && i<xe ) {
-				if(xyz_input) coor[k][j][i].z = Z[k]/cl*L_dim;
-				else coor[k][j][i].z = buffer/cl*L_dim;
+
+			for (k=0; k<KM; k++)
+			for (j=0; j<JM; j++)
+			for (i=0; i<IM; i++) {
+				if(binary_input) fread(&buffer, sizeof(double), 1, fd);
+				else fscanf(fd, "%le", &buffer);
+				if( k>=zs && k<ze && j>=ys && j<ye && i>=xs && i<xe ) {
+					coor[k][j][i].y = buffer/cl*L_dim;
+				}
+			}
+
+			for (k=0; k<KM; k++)
+			for (j=0; j<JM; j++)
+			for (i=0; i<IM; i++) {
+				if(binary_input) fread(&buffer, sizeof(double), 1, fd);
+				else fscanf(fd, "%le", &buffer);
+				if( k>=zs && k<ze && j>=ys && j<ye && i>=xs && i<xe ) {
+					coor[k][j][i].z = buffer/cl*L_dim;
+				}
 			}
 		}
 	      /*

@@ -1773,7 +1773,12 @@ int main(int argc, char **argv)
 	if(jj_periodic) PetscPrintf(PETSC_COMM_WORLD, "\nJJ-Periodic \n");
 	if(k_periodic) PetscPrintf(PETSC_COMM_WORLD, "\nK-Periodic \n");
 	if(kk_periodic) PetscPrintf(PETSC_COMM_WORLD, "\nKK-Periodic \n");
- 
+
+	/* Backward compatibility: if xyz_input is set but gridfile is still default, use "xyz.dat" */
+	if(xyz_input && strcmp(gridfile, "grid.dat") == 0) {
+		sprintf(gridfile, "xyz.dat");
+	}
+
 	//PetscOptionsGetReal(NULL, NULL, "-Fr", &Fr, NULL);
 	PetscOptionsGetReal(NULL, NULL, "-max_cs", &max_cs, NULL);
 	PetscOptionsGetReal(NULL, NULL, "-flux", &inlet_flux, NULL);			// Seokkoo Kang: the amount of inlet flux, if not set mean bulk velocity is set to 1

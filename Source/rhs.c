@@ -77,8 +77,6 @@ extern void Calculate_normal(Cmpnts csi, Cmpnts eta, Cmpnts zet, double ni[3], d
 void Contra2Cart(UserCtx *user)
 {
 	Contra2Cart_2(user);
-	//DMLocalToLocalBegin(user->da, user->lUstar, INSERT_VALUES, user->lUstar);
-	//DMLocalToLocalEnd(user->da, user->lUstar, INSERT_VALUES, user->lUstar);
 }
 
 void Contra2Cart_single(Cmpnts &csi, Cmpnts &eta, Cmpnts &zet, Cmpnts &ucont, Cmpnts *ucat)
@@ -139,10 +137,10 @@ void Contra2Cart_2(UserCtx *user)
 	Cmpnts	***icsi, ***jeta, ***kzet;
 	Cmpnts	***csi, ***eta, ***zet;
 	Cmpnts	***coor;
-	
+
 	DMGetCoordinatesLocal(da, &Coor);
 	DMDAVecGetArray(fda, Coor, &coor);
-	
+
 	if(levelset) {
 		DMDAVecGetArray(da, user->lMu, &mu);
 		DMDAVecGetArray(da, user->lDensity, &rho);

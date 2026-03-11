@@ -15,6 +15,7 @@ static char help[] = "Testing programming!";
 #include "petscsnes.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define NEWMETRIC
 
@@ -41,6 +42,7 @@ int k_begin, k_end;
 
 int pcr=0;
 int avg=0, rans=0, rans_output=0, levelset=0;
+char gridfile[256] = "grid.dat";
 int vc = 1;
 
 int cs=0;
@@ -2290,9 +2292,14 @@ int main(int argc, char **argv)
 	if(flag)sprintf(prefix, "%s_", tmp_str);
 	else sprintf(prefix, "");
 		
-	PetscOptionsGetInt(NULL, NULL, "-vc", &vc, NULL);	
+	PetscOptionsGetInt(NULL, NULL, "-vc", &vc, NULL);
 	PetscOptionsGetInt(NULL, NULL, "-binary", &binary_input, &flag);
 	PetscOptionsGetInt(NULL, NULL, "-xyz", &xyz_input, &flag);
+	PetscOptionsGetString(NULL, NULL, "-grid", gridfile, sizeof(gridfile), NULL);
+	/* Backward compatibility: if xyz_input is set but gridfile is still default, use "xyz.dat" */
+	if (xyz_input && strcmp(gridfile, "grid.dat") == 0) {
+		sprintf(gridfile, "xyz.dat");
+	}
 	PetscOptionsGetInt(NULL, NULL, "-rans", &rans, NULL);
 	PetscOptionsGetInt(NULL, NULL, "-ransout", &rans_output, NULL);
 	PetscOptionsGetInt(NULL, NULL, "-levelset", &levelset, NULL);
@@ -2490,8 +2497,8 @@ PetscErrorCode ReadCoordinates(UserCtx *user)
 
 	char str[256];
 	
-	if(xyz_input) sprintf(str, "xyz.dat");
-	else sprintf(str, "grid.dat");
+	/* Use gridfile for all input formats - xyz_input only affects the parsing format */
+	sprintf(str, "%s", gridfile);
 	
 	fd = fopen(str, "r");
 	

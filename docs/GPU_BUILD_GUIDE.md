@@ -237,6 +237,45 @@ PETSC ERROR: Caught signal number 11 SEGV
 - Run with CUDA memcheck: `compute-sanitizer ./build/Source/vwis ...`
 - Check GPU memory with `nvidia-smi`
 
+#### 5. NaN errors at first timestep (dx_min=0, Inlet Area=0)
+
+```
+CFL 1.0 time step=0.000000, dx_min=0.00000
+*** Max Ucat = nan
+ERROR detected by Hypre: INFs and/or NaNs detected in input
+```
+
+**Solution**: This issue was caused by the grid file path being ignored when using
+XML configuration with XYZ format. The code was hardcoded to look for "xyz.dat"
+instead of the user-specified filename. This has been fixed in the `gpu_portability`
+branch.
+
+If you encounter this issue:
+- Ensure your grid file exists with the correct name specified in control.xml
+- Update to the latest `gpu_portability` branch
+- See `docs/GPU_METRIC_SYNC_FIX.md` for details
+
+**Verification**: After the fix, you should see `Reading mesh.xyz` (or your filename)
+in the output, positive values for `dx_min` and `Inlet Area`, and the simulation
+should complete without NaN errors.
+
+#### 6. PETSc DMLocalToGlobal warnings with periodic BCs
+
+```
+[0]PETSC ERROR: No support for this operation for this object type
+[0]PETSC ERROR: Available only for boundary none or with parallelism in z direction
+```
+
+**Cause**: PETSc's `DMLocalToGlobal` has restrictions when periodic boundary
+conditions are combined with certain MPI domain decompositions. For example, with
+`ii_periodic` (x-direction periodic) and the domain split in x-direction.
+
+**Solution**: These are warnings that typically don't stop the simulation. To avoid
+them, choose an MPI process count that results in a compatible domain decomposition:
+- For channel flow with `ii_periodic` and `kk_periodic`: use NP=1 or NP=4 (not 2)
+- Check the "DM Distribution" output (e.g., `2 1 1` means split 2x in x, 1x in y, 1x in z)
+- Ensure the periodic direction has either 1 partition or the decomposition is in z
+
 ## Performance Tips
 
 1. **Use one MPI rank per GPU** for best performance
@@ -349,6 +388,8 @@ tests/
   design decisions, and reasoning behind each choice. **Recommended reading** for
   developers who want to understand or extend the GPU code.
 - **`docs/GPU_PORTING_PLAN.md`** - Original porting roadmap and milestones.
+- **`docs/GPU_METRIC_SYNC_FIX.md`** - Documentation of the metric vector synchronization
+  fix that resolved NaN errors with periodic boundary conditions.
 
 ## Using the GPU Kernels
 

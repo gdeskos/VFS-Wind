@@ -3183,7 +3183,7 @@ PetscErrorCode SetInitialGuessToOne(UserCtx *user)
 				  int n1, n2, n3;
 					double F;
 					
-					F  = 1.00; // 100%
+					F  = 0.25; // 25%
 					n1 = rand() % 20000 - 10000;
 					n2 = rand() % 20000 - 10000;
 					n3 = rand() % 20000 - 10000;

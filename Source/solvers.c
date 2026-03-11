@@ -328,7 +328,7 @@ PetscErrorCode Flow_Solver(UserMG *usermg,IBMNodes *ibm, FSInfo *fsi, PetscInt i
 
   level = usermg->mglevels-1;
   user = usermg->mgctx[level].user;
-	
+
 	Calc_Minimum_dt(user);	// momentum.c
   
 	#ifdef DIRICHLET
