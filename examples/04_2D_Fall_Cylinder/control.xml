@@ -18,7 +18,7 @@
 
   <!-- Simulation Control -->
   <simulation>
-    <timestep dt="0.01" totalsteps="500" output_interval="125"/>
+    <timestep dt="0.01" totalsteps="1000" output_interval="125"/>
     <restart enabled="0" timestep="0"/>
     <options delete_previous="0" second_order="0" laplacian="1" averaging="0"/>
   </simulation>
