@@ -1,7 +1,7 @@
 #!/bin/bash
 #=============================================================================
-# VFS-Wind 3D Sloshing Example Runner
-# Test Case: Two-Phase Sloshing Flow with Level Set Method
+# VFS-Wind 2D Falling Cylinder Example Runner
+# Test Case: Two-Phase Flow with FSI (Cylinder Falling Through Interface)
 #
 # Usage:
 #   ./run.sh              # Run full workflow (build, simulate, post-process)
@@ -27,15 +27,15 @@ NP_POST=${NP_POST:-1}
 USE_XML=${USE_XML:-1}
 
 # Enable GPU acceleration (1=on, 0=off) - uses Kokkos for portable GPU kernels
-ENABLE_GPU=${ENABLE_GPU:-1}
+ENABLE_GPU=${ENABLE_GPU:-0}
 
 # Number of OpenMP threads for GPU backend (0=auto-detect)
 OMP_THREADS=${OMP_THREADS:-0}
 
 # Timestep range for post-processing
-TIS=${TIS:-0}        # Starting timestep
-TIE=${TIE:-100}      # Ending timestep
-TS=${TS:-10}         # Timestep stride
+TIS=${TIS:-0}         # Starting timestep
+TIE=${TIE:-500}       # Ending timestep
+TS=${TS:-125}         # Timestep stride
 
 # Enable averaging output (0=off, 1=Reynolds stresses, 2=TKE only)
 AVG=${AVG:-0}
@@ -113,12 +113,12 @@ do_preprocess() {
     print_step "Checking required files..."
 
     # Check grid file
-    if [ -f "xyz.dat" ]; then
-        echo "  [OK] xyz.dat found"
-        local size=$(ls -lh xyz.dat | awk '{print $5}')
+    if [ -f "grid.dat" ]; then
+        echo "  [OK] grid.dat found"
+        local size=$(ls -lh grid.dat | awk '{print $5}')
         echo "       Size: ${size}"
     else
-        echo "  [ERROR] xyz.dat NOT found!"
+        echo "  [ERROR] grid.dat NOT found!"
         errors=$((errors + 1))
     fi
 
@@ -127,6 +127,16 @@ do_preprocess() {
         echo "  [OK] bcs.dat found"
     else
         echo "  [ERROR] bcs.dat NOT found!"
+        errors=$((errors + 1))
+    fi
+
+    # Check IBM data (cylinder geometry)
+    if [ -f "ibmdata00" ]; then
+        echo "  [OK] ibmdata00 (cylinder geometry) found"
+        local size=$(ls -lh ibmdata00 | awk '{print $5}')
+        echo "       Size: ${size}"
+    else
+        echo "  [ERROR] ibmdata00 NOT found!"
         errors=$((errors + 1))
     fi
 
@@ -149,8 +159,11 @@ do_preprocess() {
         if grep -q "levelset.*enabled=\"1\"" control.xml; then
             echo "  [OK] Level Set (two-phase) enabled"
         fi
-        if grep -q "sloshing=\"[1-9]\"" control.xml; then
-            echo "  [OK] Sloshing mode enabled"
+        if grep -q "immersed_boundary.*enabled=\"1\"" control.xml; then
+            echo "  [OK] Immersed Boundary Method enabled"
+        fi
+        if grep -q "fsi.*enabled=\"1\"" control.xml; then
+            echo "  [OK] Fluid-Structure Interaction enabled"
         fi
     fi
 
@@ -158,11 +171,11 @@ do_preprocess() {
     if [ ${errors} -eq 0 ]; then
         echo "  All required files present. Ready to simulate!"
         echo ""
-        echo "  Test case: 3D Sloshing Tank"
-        echo "  Physics:   Re=6666.67, two-phase (level set)"
-        echo "  Sloshing:  Mode 2"
-        echo "  Gravity:   -9.8 m/s^2 (Y-direction)"
-        echo "  Expected:  Free surface sloshing in tank"
+        echo "  Test case: 2D Falling Cylinder"
+        echo "  Physics:   Re=10, two-phase (level set), laminar"
+        echo "  FSI:       1-DOF (Y-direction), mass ratio=0.25"
+        echo "  Gravity:   -1 m/s^2 (Z-direction)"
+        echo "  Expected:  Cylinder falls through fluid interface"
     else
         echo "  Found ${errors} error(s). Please fix before running simulation."
         exit 1
@@ -171,11 +184,21 @@ do_preprocess() {
 
 # === SIMULATION FUNCTION ===
 do_simulate() {
-    print_header "Running 3D Sloshing Simulation"
+    print_header "Running 2D Falling Cylinder Simulation"
 
     check_executable "${BUILD_DIR}/Source/vwis"
 
     cd "${SCRIPT_DIR}"
+
+    # Check required files
+    if [ ! -f "grid.dat" ]; then
+        echo "ERROR: grid.dat not found!"
+        exit 1
+    fi
+    if [ ! -f "ibmdata00" ]; then
+        echo "ERROR: ibmdata00 (cylinder geometry) not found!"
+        exit 1
+    fi
 
     # Determine config file
     if [ "${USE_XML}" -eq 1 ] && [ -f "control.xml" ]; then
@@ -190,15 +213,16 @@ do_simulate() {
     if [ "${OMP_THREADS}" -gt 0 ]; then
         export OMP_NUM_THREADS=${OMP_THREADS}
     elif [ -z "${OMP_NUM_THREADS}" ]; then
-        # Auto-detect: use number of performance cores
         export OMP_NUM_THREADS=$(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || nproc 2>/dev/null || echo 4)
     fi
 
     print_step "Starting simulation with ${NP_SIM} MPI processes..."
-    echo "  Grid:       xyz.dat (200 x 41 x 200)"
-    echo "  Re:         6666.67"
+    echo "  Grid:       359 x 6 x 254 (binary format)"
     echo "  Physics:    Two-phase flow with Level Set"
-    echo "  Sloshing:   Mode 2"
+    echo "  Re:         10 (laminar)"
+    echo "  Gravity:    -1 m/s^2 (Z-direction)"
+    echo "  FSI:        Falling cylinder with mass ratio 0.25"
+    echo "  Timesteps:  500 (dt=0.01)"
     if [ "${ENABLE_GPU}" -eq 1 ]; then
         echo "  GPU:        ENABLED (OMP_NUM_THREADS=${OMP_NUM_THREADS})"
     else
@@ -214,6 +238,13 @@ do_simulate() {
     fi
 
     print_step "Simulation completed successfully!"
+
+    # Check for FSI output
+    if [ -f "FSI_position00" ]; then
+        echo "  FSI displacement data: FSI_position00"
+        local lines=$(wc -l < FSI_position00)
+        echo "  Recorded ${lines} timesteps of cylinder motion"
+    fi
 }
 
 # === POST-PROCESSING FUNCTION ===
@@ -237,8 +268,8 @@ do_postprocess() {
     echo ""
 
     # Build post-processing command
-    # Note: levelset=1 enables level set field output
-    POST_CMD="${BUILD_DIR}/Source/data -tis ${TIS} -tie ${TIE} -ts ${TS} -vtk 1 -xyz 1 -binary 0 -levelset 1"
+    # Note: levelset=1, binary grid format
+    POST_CMD="${BUILD_DIR}/Source/data -tis ${TIS} -tie ${TIE} -ts ${TS} -vtk 1 -xyz 0 -binary 1 -levelset 1"
 
     if [ "${AVG}" -gt 0 ]; then
         POST_CMD="${POST_CMD} -avg ${AVG}"
@@ -269,14 +300,21 @@ do_clean() {
     cd "${SCRIPT_DIR}"
 
     print_step "Removing binary output files..."
-    rm -f ufield*.dat vfield*.dat pfield*.dat nvfield*.dat
+    rm -f ufield*.dat vfield*.dat pfield*.dat nvfield*.dat lfield*.dat
     rm -f su0_*.dat su1_*.dat su2_*.dat sp_*.dat
-    rm -f kfield*.dat lfield*.dat qfield*.dat
-    rm -f levelset*.dat
+    rm -f kfield*.dat qfield*.dat
     rm -f *.info
 
     print_step "Removing VTK files..."
     rm -f Result*.vts Result*.vtm Result*.plt
+
+    print_step "Removing FSI output files..."
+    rm -f FSI_position* FSI_Angle* DATA_FSI*
+    rm -f Force_Coeff_* Momt_Coeff_* Power_*
+    rm -f surface*.dat
+
+    print_step "Removing convergence/diagnostic files..."
+    rm -f Converge_* Kinetic_Energy.dat mass.dat shear_velocity.dat
 
     print_step "Removing log files..."
     rm -f err* output*.log
@@ -287,8 +325,8 @@ do_clean() {
 # === HELP FUNCTION ===
 do_help() {
     cat << EOF
-VFS-Wind 3D Sloshing Example Runner
-=====================================
+VFS-Wind 2D Falling Cylinder Example Runner
+============================================
 
 Usage: ./run.sh [command]
 
@@ -305,48 +343,51 @@ Environment Variables:
   NP_SIM       Number of MPI processes for simulation (default: 4)
   NP_POST      Number of MPI processes for post-processing (default: 1)
   USE_XML      Use XML config file (1) or control.dat (0) (default: 1)
-  ENABLE_GPU   Enable GPU acceleration (1=on, 0=off) (default: 1)
+  ENABLE_GPU   Enable GPU acceleration (1=on, 0=off) (default: 0)
   OMP_THREADS  Number of OpenMP threads for GPU backend (default: auto)
   TIS          Starting timestep for post-processing (default: 0)
-  TIE          Ending timestep for post-processing (default: 100)
-  TS           Timestep stride for post-processing (default: 10)
+  TIE          Ending timestep for post-processing (default: 500)
+  TS           Timestep stride for post-processing (default: 125)
   AVG          Averaging mode: 0=off, 1=Reynolds stresses, 2=TKE (default: 0)
 
 Examples:
-  # Run with 8 MPI processes (GPU enabled by default)
+  # Check input files before running
+  ./run.sh preprocess
+
+  # Run with 8 MPI processes
   NP_SIM=8 ./run.sh simulate
 
-  # Run with GPU disabled (CPU only)
-  ENABLE_GPU=0 ./run.sh simulate
-
-  # Run with specific number of OpenMP threads
-  OMP_THREADS=8 ./run.sh simulate
+  # Run with GPU enabled
+  ENABLE_GPU=1 ./run.sh simulate
 
   # Use legacy control.dat instead of XML
   USE_XML=0 ./run.sh simulate
 
   # Post-process specific timestep range
-  TIS=50 TIE=100 TS=5 ./run.sh postprocess
-
-  # Quick test run
-  NP_SIM=2 ./run.sh
+  TIS=0 TIE=500 TS=50 ./run.sh postprocess
 
 Test Case Description:
-  This test case simulates 3D sloshing in a rectangular tank using the
-  Level Set method for two-phase flow. The simulation captures the
-  free surface motion of water sloshing in a container.
+  This test case simulates a 2D cylinder falling through a two-phase
+  fluid interface using the Level Set method for interface tracking
+  and Immersed Boundary Method for the cylinder.
 
   Physical parameters:
-    - Water density: 1000 kg/m^3
-    - Air density: 1 kg/m^3
-    - Water viscosity: 1.0e-3 Pa.s
-    - Air viscosity: 1.8e-5 Pa.s
-    - Gravity: -9.8 m/s^2 (y-direction)
+    - Reynolds number: 10 (laminar)
+    - Gravity: -1 m/s^2 (Z-direction)
+    - Density ratio: 1000:1 (heavy fluid : light fluid)
+    - Mass ratio: m* = 0.25
+    - Initial Z position: 1.25 m
+
+  Expected behavior:
+    - Cylinder falls under gravity
+    - Crosses the fluid-fluid interface
+    - Generates waves at interface
 
 Output Files:
   Simulation:
     - ufield*.dat, pfield*.dat, etc. (PETSc binary format)
     - lfield*.dat (level set field)
+    - FSI_position00 (cylinder displacement history)
 
   Post-processing:
     - Result*.vts (VTK structured grid - open in ParaView)
@@ -385,8 +426,8 @@ case "${1:-all}" in
         echo "Next steps:"
         echo "  1. Open ParaView"
         echo "  2. File -> Open -> Select Result*.vts or Result*.vtm"
-        echo "  3. Apply filters to visualize velocity, pressure, level set"
-        echo "  4. Use 'Contour' filter on Level set field to view free surface"
+        echo "  3. Use 'Contour' filter on Level set field to view interface"
+        echo "  4. Animate to see cylinder falling through interface"
         echo ""
         ;;
     *)

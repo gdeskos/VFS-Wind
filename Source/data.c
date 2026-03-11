@@ -3017,9 +3017,10 @@ int main(int argc, char **argv)
 	PetscOptionsGetInt(NULL, NULL, "-vc", &vc, NULL);
 	PetscOptionsGetInt(NULL, NULL, "-binary", &binary_input, &flag);
 	PetscOptionsGetInt(NULL, NULL, "-xyz", &xyz_input, &flag);
-	PetscOptionsGetString(NULL, NULL, "-grid", gridfile, sizeof(gridfile), NULL);
-	/* Backward compatibility: if xyz_input is set but gridfile is still default, use "xyz.dat" */
-	if (xyz_input && strcmp(gridfile, "grid.dat") == 0) {
+	PetscBool grid_explicitly_set = PETSC_FALSE;
+	PetscOptionsGetString(NULL, NULL, "-grid", gridfile, sizeof(gridfile), &grid_explicitly_set);
+	/* Backward compatibility: if xyz_input is set but gridfile was NOT explicitly provided, use "xyz.dat" */
+	if (xyz_input && !grid_explicitly_set) {
 		sprintf(gridfile, "xyz.dat");
 	}
 	PetscOptionsGetInt(NULL, NULL, "-rans", &rans, NULL);

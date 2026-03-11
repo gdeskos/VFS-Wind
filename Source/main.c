@@ -1741,7 +1741,8 @@ int main(int argc, char **argv)
 	PetscOptionsGetString(NULL, NULL, "-path", path, 256, NULL);		//  Seokkoo Kang: path for saving output; grid.dat, bcs,dat should be put there, but control.dat should exist in the current directory where job is submitted
 	
 	sprintf(gridfile, "grid.dat");
-	PetscOptionsGetString(NULL, NULL, "-grid", gridfile, 256, NULL);	//  Seokkoo Kang: the name of the grid file other than grid.dat if you want
+	PetscBool grid_explicitly_set = PETSC_FALSE;
+	PetscOptionsGetString(NULL, NULL, "-grid", gridfile, 256, &grid_explicitly_set);	//  Seokkoo Kang: the name of the grid file other than grid.dat if you want
 
 	sprintf(path_inflow, "./inflow");
 	PetscOptionsGetString(NULL, NULL, "-path_inflow", path_inflow, 256, NULL);         //  Xiaolei Yang: path for inflow field
@@ -1774,8 +1775,8 @@ int main(int argc, char **argv)
 	if(k_periodic) PetscPrintf(PETSC_COMM_WORLD, "\nK-Periodic \n");
 	if(kk_periodic) PetscPrintf(PETSC_COMM_WORLD, "\nKK-Periodic \n");
 
-	/* Backward compatibility: if xyz_input is set but gridfile is still default, use "xyz.dat" */
-	if(xyz_input && strcmp(gridfile, "grid.dat") == 0) {
+	/* Backward compatibility: if xyz_input is set but gridfile was NOT explicitly provided, use "xyz.dat" */
+	if(xyz_input && !grid_explicitly_set) {
 		sprintf(gridfile, "xyz.dat");
 	}
 

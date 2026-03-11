@@ -3680,7 +3680,7 @@ PetscErrorCode ibm_interpolation_advanced(UserCtx *user)
 		DMDAVecRestoreArray(da, user->lAj, &aj);
 		DMDAVecRestoreArray(da, user->lNvert, &nvert);
 		DMDAVecRestoreArray(da, user->lUstar, &ustar);
-		DMDAVecRestoreArray(fda, user->Ucat, &ucat);
+		// Note: user->Ucat was already restored at line 3601, do not restore again
 
 		Contra2Cart(user);
 
@@ -3694,7 +3694,7 @@ PetscErrorCode ibm_interpolation_advanced(UserCtx *user)
 		DMDAVecGetArray(da, user->lAj, &aj);
 		DMDAVecGetArray(da, user->lNvert, &nvert);
 		DMDAVecGetArray(da, user->lUstar, &ustar);
-		DMDAVecGetArray(fda, user->Ucat, &ucat);
+		// Note: user->Ucat is not needed again after the loop, so don't re-acquire it
 	}//tmp_end
 
 	DMGlobalToLocalBegin(da, user->P, INSERT_VALUES, user->lP);
@@ -3938,8 +3938,7 @@ PetscErrorCode ibm_interpolation_advanced_fsi(UserCtx *user)
 		DMDAVecRestoreArray(fda, user->lEta, &jeta);
 		DMDAVecRestoreArray(fda, user->lZet, &kzet);
 		DMDAVecRestoreArray(da, user->lNvert, &nvert);
-		// Restore Ucat before Contra2Cart to avoid double DMDAVecGetArray
-		DMDAVecRestoreArray(fda, user->Ucat, &ucat);
+		// Note: ucat was already restored at line 3872, do NOT restore again
 
 		DMGlobalToLocalBegin(fda, user->Ucont, INSERT_VALUES, user->lUcont);
 		DMGlobalToLocalEnd(fda, user->Ucont, INSERT_VALUES, user->lUcont);

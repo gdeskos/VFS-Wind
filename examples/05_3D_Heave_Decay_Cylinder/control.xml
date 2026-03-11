@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  VFS-Wind Configuration File
+  Test Case: 3D Heave Decay Cylinder (Vertical Y motion)
+
+  This simulates a cylinder undergoing free heave decay in a two-phase
+  fluid using the Level Set method for interface tracking.
+
+  Physical parameters:
+    - Reynolds number: 6666.67 (based on cylinder diameter)
+    - Gravity: -9.81 m/s^2 (Y-direction)
+    - Density ratio: 1000:1 (water : air)
+    - Mass ratio: m* = 0.25
+
+  NOTE: This test requires a grid file that is not included.
+        You need to generate or provide grid.dat before running.
+
+  Usage: mpirun -np 8 ./vwis -xml control.xml
+-->
+<vfswind version="1.0">
+
+  <!-- Simulation Control -->
+  <simulation>
+    <timestep dt="0.0005" totalsteps="10000" output_interval="1000"/>
+    <restart enabled="0" timestep="0"/>
+    <options delete_previous="0" second_order="1" laplacian="0" averaging="0"/>
+  </simulation>
+
+  <!-- Physics Parameters -->
+  <physics>
+    <reynolds_number>6666.6666</reynolds_number>
+    <gravity x="0.0" y="-9.81" z="0.0"/>
+  </physics>
+
+  <!-- Turbulence Modeling -->
+  <turbulence>
+    <les enabled="1" model="dynamic" max_cs="0.2"/>
+    <rans enabled="0" model="k-omega-sst"/>
+    <wall_function enabled="0"/>
+  </turbulence>
+
+  <!-- Level Set (Two-Phase Flow) -->
+  <levelset enabled="1" sloshing="0" surface_tension="0"
+            level_in="2" level_in_height="0.0" dthick="0.006"
+            tau="0.01" air_flow="0" fix_level="0">
+    <!-- fluid0 = water (density=1000), fluid1 = air (density=1) -->
+    <fluid0 density="1000" viscosity="1.0e-3"/>
+    <fluid1 density="1" viscosity="1.8e-5"/>
+    <iterations>20</iterations>
+    <weno_order>4</weno_order>
+  </levelset>
+
+  <!-- Solver Settings -->
+  <solvers>
+    <poisson type="1" iterations="40" tolerance="1.0e-6"/>
+    <momentum implicit="4" max_iterations="50" tolerance="1.0e-6"/>
+  </solvers>
+
+  <!-- Parallel/Domain Settings -->
+  <parallel>
+    <periodic i="0" j="0" k="0"/>
+  </parallel>
+
+  <!-- Output Settings -->
+  <output>
+    <path>./</path>
+    <vtk enabled="0"/>
+    <binary enabled="1"/>
+  </output>
+
+  <!-- Grid and Boundary Files -->
+  <!-- NOTE: grid.dat is MISSING - you need to provide this file -->
+  <grid file="grid.dat" format="binary"/>
+  <boundaries file="bcs.dat"/>
+
+  <!-- Immersed Boundary with FSI -->
+  <immersed_boundary enabled="1" bodies="1"/>
+
+  <!-- Fluid-Structure Interaction - Heave Decay -->
+  <fsi enabled="1" forced_motion="0" fall_cylinder="0">
+    <!-- Cylinder center position -->
+    <center x="0.0" y="0.0254" z="0.0"/>
+    <!-- Degrees of freedom: y (heave direction) -->
+    <dof y="1"/>
+    <!-- Structural parameters -->
+    <parameters reduced_velocity="0.897597901025655210"
+                damping="0.0"
+                mass_ratio="0.25"
+                body_mass="23.63"/>
+  </fsi>
+
+  <!-- Channel Flow Settings (inlet disabled) -->
+  <channel_flow enabled="0" inlet="0"/>
+
+</vfswind>
