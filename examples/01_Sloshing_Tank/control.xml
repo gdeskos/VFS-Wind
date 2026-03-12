@@ -10,7 +10,7 @@
 
   <!-- Simulation Control -->
   <simulation>
-    <timestep dt="0.001" totalsteps="100" output_interval="10"/>
+    <timestep dt="0.001" totalsteps="10000" output_interval="10"/>
     <restart enabled="0" timestep="0"/>
     <options delete_previous="0" second_order="1" laplacian="1" averaging="0"/>
   </simulation>
